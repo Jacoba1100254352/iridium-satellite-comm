@@ -1,6 +1,7 @@
 #include <Adafruit_NeoPixel.h>
 #include <Arduino.h>
 #include <IridiumSBD.h>
+#include "../include/print_functions.h"
 
 #define DIAGNOSTICS true
 #define SerialMon Serial
@@ -50,10 +51,59 @@ static unsigned long lastBounceMs = 0;
 // =========================
 // RockBLOCK on Serial1 (UART0: TX=D0, RX=D1)
 // =========================
+// Optional: define sleep and ring pins for power and wake control.  If you attach
+// these pins to your microcontroller and RockBLOCK, uncomment the definitions
+// below and set the numbers to match your wiring.  The sleep pin should connect
+// to the RockBLOCK ON_OFF (or SLP) line, and the ring pin should connect to
+// the RockBLOCK RI output.
+// static constexpr int PIN_ISBD_SLEEP = 7;   // microcontroller pin for ON_OFF / SLP
+// static constexpr int PIN_ISBD_RI    = 6;   // microcontroller pin for RI (active low)
+//
+// When both pins are defined, construct the modem with:
+// IridiumSBD modem(Serial1, PIN_ISBD_SLEEP, PIN_ISBD_RI);
+// and then call modem.enableRingAlerts(true) in setup().
+//
+// In the current configuration no extra pins are attached, so use the basic constructor:
 IridiumSBD modem(Serial1);
 
 #if DIAGNOSTICS
-void ISBDConsoleCallback(IridiumSBD *d, const char c) { SerialMon.write(c); }
+// void ISBDConsoleCallback(IridiumSBD *d, const char c) { SerialMon.write(c); }
+void ISBDConsoleCallback(IridiumSBD *d, char c) {
+  SerialMon.write(c); // keep the raw pass-through
+
+  static char line[96];
+  static uint8_t idx = 0;
+
+  if (c == '\r') return; // ignore CR
+  if (c == '\n') {
+    line[idx] = '\0';
+    idx = 0;
+
+    // Look for: +SBDIX: a, b, c, d, e, f
+    if (strncmp(line, "+SBDIX:", 7) == 0) {
+      int a, b, c2, d, e, f;
+      // Be tolerant of spaces
+      if (sscanf(line + 7, " %d , %d , %d , %d , %d , %d", &a, &b, &c2, &d, &e, &f) == 6) {
+        gMOStatus = a; gMOMSN = b; gMTStatus = c2; gMTMSN = d; gMTLen = e; gMTQueued = f;
+        gSBDIXSeen = true;
+
+        printSBDIXCompact();
+        #if DIAGNOSTICS
+          printSBDIXLegendOnce();
+          printSBDIXVerbose();
+        #endif
+      }
+    }
+    return;
+  }
+
+  if (idx < sizeof(line) - 1) {
+    line[idx++] = c;
+  } else {
+    // overflow: reset
+    idx = 0;
+  }
+}
 void ISBDDiagsCallback(IridiumSBD *d, const char c)    { SerialMon.write(c); }
 #endif
 
@@ -121,7 +171,8 @@ void setup() {
     digitalWrite(NEOPIXEL_PWR, HIGH);
   #endif
   pixels.begin();
-  pixels.setBrightness(50);
+  // pixels.setBrightness(50);
+  pixels.setBrightness(8);    // Dim for battery conservation
   pixelSetMode(MODE_IDLE);
 
   // RockBLOCK UART
@@ -149,37 +200,34 @@ void setup() {
     SerialMon.print("Signal quality (0-5): "); SerialMon.println(csq);
   }
 
+  /***   POWER EFFICIENCY SETTINGS   ***/
+  // Adjust modem timeouts and power profile for battery efficiency.  These settings
+  // shorten timeouts so the radio does not stay powered longer than necessary.  Feel
+  // free to tune these values based on your environment.
+  modem.setPowerProfile(IridiumSBD::DEFAULT_POWER_PROFILE);
+  modem.adjustATTimeout(10);
+  modem.adjustSendReceiveTimeout(120);
+  modem.adjustStartupTimeout(60);
+  modem.adjustSBDSessionTimeout(180);
+  // Enable ring alerts when a ring indicator pin is attached.
+  // modem.enableRingAlerts(true);
+  // Keep the MSSTM workaround enabled.
+  modem.useMSSTMWorkaround(true);
+
+  /// Optional: enable diagnostic console output
+#if DIAGNOSTICS
+  SerialMon.println();
+  SerialMon.println("SBDIX fields explanation:");
+  SerialMon.println("  MO-status:  Mobile Originated status (e.g., 0=success, 32=no network service)");
+  SerialMon.println("  MOMSN:      Mobile Originated Message Sequence Number (increments with each send)");
+  SerialMon.println("  MT-status:  Mobile Terminated status (0=no message, 1=message received, 2=error)");
+  SerialMon.println("  MTMSN:      Mobile Terminated Message Sequence Number (for the received message)");
+  SerialMon.println("  MT-length:  Length in bytes of the received Mobile Terminated message");
+  SerialMon.println("  MT-queued:  Number of pending Mobile Terminated messages still waiting on the server");
+  SerialMon.println();
+#endif
+
   SerialMon.println("Press D9 (ALERT) or D8 (SOS) to send.");
-}
-
-// Add this helper function somewhere above sendTextWithIndicators()
-static void printSBDIXStatus(const int moStatus, const int moMOMSN, const int mtStatus,
-                             const int mtMSN, const size_t mtLength, const int mtQueued) {
-  SerialMon.print("SBDIX result → ");
-  SerialMon.print("MO-status="); SerialMon.print(moStatus);
-  SerialMon.print(" (");
-  switch (moStatus) {
-    case 0:  SerialMon.print("Success"); break;
-    case 1:  SerialMon.print("Partial success?"); break;
-    case 32: SerialMon.print("No network service"); break;
-    // You can add more cases based on your modem docs
-    default: SerialMon.print("Unknown code"); break;
-  }
-  SerialMon.print("), MOMSN="); SerialMon.print(moMOMSN);
-
-  SerialMon.print(", MT-status="); SerialMon.print(mtStatus);
-  SerialMon.print(" (");
-  switch (mtStatus) {
-    case 0:  SerialMon.print("No MT message"); break;
-    case 1:  SerialMon.print("MT message received"); break;
-    case 2:  SerialMon.print("MT mailbox check error"); break;
-    default: SerialMon.print("Unknown code"); break;
-  }
-  SerialMon.print("), MTMSN="); SerialMon.print(mtMSN);
-
-  SerialMon.print(", MT-length="); SerialMon.print(mtLength);
-  SerialMon.print(" bytes, MT-queued="); SerialMon.print(mtQueued);
-  SerialMon.println(" messages waiting");
 }
 
 // Build small MO payload: [len8][ASCII bytes...], perform send+receive, and drive NeoPixel states.
@@ -199,8 +247,13 @@ static bool sendTextWithIndicators(const char *text) {
 
   // Send/receive SBD
   const int err = modem.sendReceiveSBDBinary(mo, 1 + len, mt, mtLen);
-
-  // printSBDIXStatus(moStatus, momsn, mtStatus, mtmsn, mtLen, mtQueued);
+  if (gSBDIXSeen) {
+    printSBDIXCompact();
+    #if DIAGNOSTICS
+      printSBDIXVerbose();
+    #endif
+    gSBDIXSeen = false; // reset after printing
+  }
 
   if (err != ISBD_SUCCESS) {
     /***   ON FAILURE   ***/

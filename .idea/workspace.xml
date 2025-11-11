@@ -17,21 +17,12 @@
     </configurations>
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="57e4f083-aa23-42d0-b943-7e055edcfb81" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/copilot.data.migration.agent.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/copilot.data.migration.ask.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/copilot.data.migration.ask2agent.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/copilot.data.migration.edit.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/editor.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/archive/IridiumPrototype/IridiumPrototype.ino" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/archive/LEDandButtonTest/LEDandButtonTest.ino" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/platformio.ini" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/IridiumExperimenter/IridiumExperimenter.ino" beforeDir="false" afterPath="$PROJECT_DIR$/archive/IridiumExperimenter.ino" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
+    <list default="true" id="57e4f083-aa23-42d0-b943-7e055edcfb81" name="Changes" comment="Updating to use platformio">
+      <change afterPath="$PROJECT_DIR$/include/print_functions.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/include/README" beforeDir="false" afterPath="$PROJECT_DIR$/include/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/lib/README" beforeDir="false" afterPath="$PROJECT_DIR$/lib/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/main.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/test/README" beforeDir="false" afterPath="$PROJECT_DIR$/test/README.md" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -64,6 +55,7 @@
 }</component>
   <component name="HighlightingSettingsPerFile">
     <setting file="file://$PROJECT_DIR$/archive/IridiumExperimenter.ino" root0="SKIP_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/include/README.md" root0="FORCE_HIGHLIGHTING" />
     <setting file="file://$PROJECT_DIR$/src/main.cpp" root0="FORCE_HIGHLIGHTING" />
   </component>
   <component name="MacroExpansionManager">
@@ -134,6 +126,7 @@
     "nodejs_package_manager_path": "npm",
     "org.rust.cargo.project.model.impl.CargoExternalSystemProjectAware.subscribe.first.balloon": "",
     "org.rust.first.attach.projects": "true",
+    "settings.editor.selected.configurable": "editor.reader.mode",
     "to.speed.mode.migration.done": "true",
     "vue.rearranger.settings.migration": "true"
   }
@@ -205,11 +198,24 @@
       <option name="presentableId" value="Default" />
       <updated>1762882690526</updated>
       <workItem from="1762882691556" duration="858000" />
-      <workItem from="1762883688794" duration="6384000" />
+      <workItem from="1762883688794" duration="10186000" />
     </task>
+    <task id="LOCAL-00001" summary="Updating to use platformio">
+      <option name="closed" value="true" />
+      <created>1762900295268</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1762900295268</updated>
+    </task>
+    <option name="localTasksCounter" value="2" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
     <option name="version" value="3" />
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="Updating to use platformio" />
+    <option name="LAST_COMMIT_MESSAGE" value="Updating to use platformio" />
   </component>
 </project>
