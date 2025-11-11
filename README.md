@@ -11,6 +11,7 @@ This repo has example code for the SAMD21-based Arduino code interfacing with a 
 * [Adafruit ZeroTimer library](https://github.com/adafruit/Adafruit_ZeroTimer) - Timer library for SAMD21
 * [Adafruit GFX library](https://github.com/adafruit/Adafruit-GFX-Library) - Core library for displays
 * [Adafruit SSD1306 library](https://github.com/adafruit/Adafruit_SSD1306) - Library for our Monochrome OLEDs based on SSD1306 drivers
+* Use the Arduino Nano RP2040 Connect board definition in the Arduino IDE Board Manager
 
 ## Board Design
 

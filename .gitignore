@@ -1,0 +1,7 @@
+### PlatformIO template
+.pioenvs
+.piolibdeps
+.clang_complete
+.gcc-flags.json
+.pio
+
