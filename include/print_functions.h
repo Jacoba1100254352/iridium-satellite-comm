@@ -61,9 +61,11 @@ static void printModemGlossaryOnce() {
 static void printSBDIXCompact() {
   if (!gSBDIXSeen) return;
   SerialMon.print("SBDIX: MO="); SerialMon.print(gMOStatus); SerialMon.print(" ("); SerialMon.print(moStatusToStr(gMOStatus)); SerialMon.print(")");
-  SerialMon.print(", MOMSN=");    SerialMon.print(gMOMSN);
-  SerialMon.print(", MT=");       SerialMon.print(gMTStatus); SerialMon.print(" ("); SerialMon.print(mtStatusToStr(gMTStatus)); SerialMon.print(")");
-  SerialMon.print(", MTQ=");      SerialMon.println(gMTQueued);
+  SerialMon.print(", MOMSN=");  SerialMon.print(gMOMSN);
+  SerialMon.print(", MT=");     SerialMon.print(gMTStatus); SerialMon.print(" ("); SerialMon.print(mtStatusToStr(gMTStatus)); SerialMon.print(")");
+  SerialMon.print(", MTMSN=");  SerialMon.print(gMTMSN);
+  SerialMon.print(", MTLEN=");  SerialMon.print(gMTLen);
+  SerialMon.print(", MTQ=");    SerialMon.println(gMTQueued);
 }
 
 // --- Verbose printer: only compiled/emitted when DIAGNOSTICS is true ---
@@ -190,7 +192,7 @@ static void diagIngestConsoleLine(const char* line) {
 static void diagIngestDiagLine(const char* line) {
 #if IF_VERBOSE
   SerialMon.print("DBG: "); SerialMon.println(line);
-#elifdef  IF_COMPACT
+#elif  IF_COMPACT
   // Plain line (neither ">>" nor "<<"): treat as RX content, but ignore pure echoes
   if (strncmp(line, "AT+", 3) == 0 || strncmp(line, "AT-", 3) == 0) return; // suppress "AT+SBDIX" etc. duplicates
   diagPrintRX(line);

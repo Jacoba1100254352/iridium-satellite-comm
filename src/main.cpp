@@ -68,9 +68,9 @@ IridiumSBD modem(Serial1);
 // void ISBDConsoleCallback(IridiumSBD *d, const char c) { SerialMon.write(c); }
 void ISBDConsoleCallback(IridiumSBD *d, const char c) {
   // Only echo raw characters in VERBOSE
-  #if IF_VERBOSE
+#if IF_VERBOSE
   SerialMon.write(c);
-  #endif
+#endif
 
   static char line[128];
   static uint8_t idx = 0;
@@ -81,10 +81,19 @@ void ISBDConsoleCallback(IridiumSBD *d, const char c) {
     idx = 0;
 
     if (line[0] != '\0') {
+#if !IF_VERBOSE   // Avoid duplicate lines in VERBOSE mode
+      // Always echo raw key modem lines so logs show original then parsed
+      // (unconditional: printed in all log modes)
+      if (strncmp(line, "+SBDIX:", 7) == 0) {
+        SerialMon.print("<< ");
+        SerialMon.println(line);
+      }
+#endif
+
       // Pretty-print (COMPACT/VERBOSE)
-      #if IF_COMPACT
+#if IF_COMPACT
       diagIngestConsoleLine(line);
-      #endif
+#endif
 
       // Parse +SBDIX and emit compact/verbose status
       if (strncmp(line, "+SBDIX:", 7) == 0) {
@@ -93,11 +102,11 @@ void ISBDConsoleCallback(IridiumSBD *d, const char c) {
           gMOStatus = a; gMOMSN = b; gMTStatus = c2; gMTMSN = d2; gMTLen = e; gMTQueued = f;
           gSBDIXSeen = true;
 
-          #if IF_COMPACT
+#if IF_COMPACT
           printSBDIXCompact();
-          #elif IF_VERBOSE
+#elif IF_VERBOSE
           printSBDIXLegendOnce(); printSBDIXVerbose();
-          #endif
+#endif
         }
       }
     }
@@ -107,9 +116,9 @@ void ISBDConsoleCallback(IridiumSBD *d, const char c) {
   if (idx < sizeof(line) - 1) line[idx++] = c; else idx = 0; // guard overflow
 }
 void ISBDDiagsCallback(IridiumSBD *d, char c) {
-  #if IF_VERBOSE
+#if IF_VERBOSE
   SerialMon.write(c); // raw only in verbose
-  #endif
+#endif
 
   static char line[128];
   static uint8_t idx = 0;
@@ -118,11 +127,11 @@ void ISBDDiagsCallback(IridiumSBD *d, char c) {
   if (c == '\n') {
     line[idx] = '\0';
     idx = 0;
-    #if IF_VERBOSE
+#if IF_VERBOSE
       if (line[0] != '\0') {
         SerialMon.print("DBG: "); SerialMon.println(line);
       }
-    #endif
+#endif
     return;
   }
 
@@ -189,10 +198,10 @@ void setup() {
   waitForSerial();
 
   // NeoPixel power (if present) and init
-  #if defined(NEOPIXEL_POWER)
+#if defined(NEOPIXEL_POWER)
     pinMode(NEOPIXEL_PWR, OUTPUT);
     digitalWrite(NEOPIXEL_PWR, HIGH);
-  #endif
+#endif
   pixels.begin();
   // pixels.setBrightness(50);
   pixels.setBrightness(8);    // Dim for battery conservation
@@ -228,17 +237,26 @@ void setup() {
   // shorten timeouts so the radio does not stay powered longer than necessary.  Feel
   // free to tune these values based on your environment.
   modem.setPowerProfile(IridiumSBD::DEFAULT_POWER_PROFILE);
+  // Aggressive Timeouts:
   modem.adjustATTimeout(10);
   modem.adjustSendReceiveTimeout(120);
   modem.adjustStartupTimeout(60);
   modem.adjustSBDSessionTimeout(180);
-  // Enable ring alerts when a ring indicator pin is attached.
+
+  // Balanced Timeouts:
+  // modem.adjustATTimeout(30);
+  // modem.adjustSendReceiveTimeout(300);   // 5 min
+  // modem.adjustStartupTimeout(120);
+  // modem.adjustSBDSessionTimeout(420);    // 7 min
+
+  // TODO: Enable ring alerts when a ring indicator pin is attached.
   // modem.enableRingAlerts(true);
   // Keep the MSSTM workaround enabled.
-  modem.useMSSTMWorkaround(true);
+  // FIXME: this currently causes the << +SBDIX: 32, 6, 2, 0, 0, 0 line to not appear
+  // modem.useMSSTMWorkaround(true);
 
   /// Optional: enable diagnostic console output
-#if IF_VERBOSE
+#if !IF_QUIET
   SerialMon.println();
   SerialMon.println("SBDIX fields explanation:");
   SerialMon.println("  MO-status:  Mobile Originated status (e.g., 0=success, 32=no network service)");

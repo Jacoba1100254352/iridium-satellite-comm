@@ -17,8 +17,9 @@
     </configurations>
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="57e4f083-aa23-42d0-b943-7e055edcfb81" name="Changes" comment="Adding some efficiency measures and more instructional logging.">
-      <change afterPath="$PROJECT_DIR$/include/config.h" afterDir="false" />
+    <list default="true" id="57e4f083-aa23-42d0-b943-7e055edcfb81" name="Changes" comment="Cleaning up the COMPACT logging view.">
+      <change beforePath="$PROJECT_DIR$/archive/IridiumPrototype/IridiumPrototype.ino" beforeDir="false" afterPath="$PROJECT_DIR$/archive/IridiumPrototype/IridiumPrototype.ino" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/include/config.h" beforeDir="false" afterPath="$PROJECT_DIR$/include/config.h" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/include/print_functions.h" beforeDir="false" afterPath="$PROJECT_DIR$/include/print_functions.h" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/main.cpp" afterDir="false" />
     </list>
@@ -196,7 +197,7 @@
       <option name="presentableId" value="Default" />
       <updated>1762882690526</updated>
       <workItem from="1762882691556" duration="858000" />
-      <workItem from="1762883688794" duration="21093000" />
+      <workItem from="1762883688794" duration="27131000" />
     </task>
     <task id="LOCAL-00001" summary="Updating to use platformio">
       <option name="closed" value="true" />
@@ -214,7 +215,15 @@
       <option name="project" value="LOCAL" />
       <updated>1762904095853</updated>
     </task>
-    <option name="localTasksCounter" value="3" />
+    <task id="LOCAL-00003" summary="Cleaning up the COMPACT logging view.">
+      <option name="closed" value="true" />
+      <created>1762917675644</created>
+      <option name="number" value="00003" />
+      <option name="presentableId" value="LOCAL-00003" />
+      <option name="project" value="LOCAL" />
+      <updated>1762917675644</updated>
+    </task>
+    <option name="localTasksCounter" value="4" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -223,6 +232,7 @@
   <component name="VcsManagerConfiguration">
     <MESSAGE value="Updating to use platformio" />
     <MESSAGE value="Adding some efficiency measures and more instructional logging." />
-    <option name="LAST_COMMIT_MESSAGE" value="Adding some efficiency measures and more instructional logging." />
+    <MESSAGE value="Cleaning up the COMPACT logging view." />
+    <option name="LAST_COMMIT_MESSAGE" value="Cleaning up the COMPACT logging view." />
   </component>
 </project>

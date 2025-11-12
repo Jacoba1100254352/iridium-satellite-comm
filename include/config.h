@@ -24,11 +24,11 @@
 #endif
 
 // Helpers
-#if (LOG_LEVEL >= 1)
+#if (LOG_LEVEL == 1)
 #define IF_COMPACT 1
 #define IF_VERBOSE 0
 #define IF_QUIET 0
-#elif (LOG_LEVEL >= 2)
+#elif (LOG_LEVEL == 2)
 #define IF_VERBOSE 1
 #define IF_COMPACT 0
 #define IF_QUIET 0
