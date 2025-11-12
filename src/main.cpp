@@ -41,6 +41,9 @@ static volatile bool waitBlinkOn = false;
 static unsigned long lastBlinkToggle = 0;
 static unsigned long successUntil = 0;
 
+// SBDIX status (updated by console callback)
+static volatile bool gLastMOSuccess = false;
+
 // Debounce
 static bool lastAlert = true; // pullup idle HIGH
 static bool lastSOS   = true;
@@ -109,6 +112,7 @@ void ISBDConsoleCallback(IridiumSBD *d, const char c) {
 #endif
         }
       }
+      gLastMOSuccess = (gMOStatus == 0);
     }
     return;
   }
@@ -238,16 +242,16 @@ void setup() {
   // free to tune these values based on your environment.
   modem.setPowerProfile(IridiumSBD::DEFAULT_POWER_PROFILE);
   // Aggressive Timeouts:
-  modem.adjustATTimeout(10);
-  modem.adjustSendReceiveTimeout(120);
-  modem.adjustStartupTimeout(60);
-  modem.adjustSBDSessionTimeout(180);
+  // modem.adjustATTimeout(10);
+  // modem.adjustSendReceiveTimeout(120);
+  // modem.adjustStartupTimeout(60);
+  // modem.adjustSBDSessionTimeout(180);
 
   // Balanced Timeouts:
-  // modem.adjustATTimeout(30);
-  // modem.adjustSendReceiveTimeout(300);   // 5 min
-  // modem.adjustStartupTimeout(120);
-  // modem.adjustSBDSessionTimeout(420);    // 7 min
+  modem.adjustATTimeout(30);
+  modem.adjustSendReceiveTimeout(300);   // 5 min
+  modem.adjustStartupTimeout(120);
+  modem.adjustSBDSessionTimeout(420);    // 7 min
 
   // TODO: Enable ring alerts when a ring indicator pin is attached.
   // modem.enableRingAlerts(true);
@@ -289,22 +293,41 @@ static bool sendTextWithIndicators(const char *text) {
   SerialMon.print("Sending \""); SerialMon.print(text); SerialMon.println("\"...");
   pixelSetMode(MODE_WAITING);
 
-  // Send/receive SBD
+  // 1) Kick off the SBD session
   const int err = modem.sendReceiveSBDBinary(mo, 1 + len, mt, mtLen);
+
+  // 2) If we saw an SBDIX line, prefer *its* truth over 'err'
   if (gSBDIXSeen) {
-// #ifdef IF_COMPACT
-//     printSBDIXCompact();
-// #elifdef IF_VERBOSE
-//     printSBDIXVerbose();
-// #else
-//     // No extra printing
-// #endif
-//     if (gMOStatus == 32) SerialMon.println("Hint: No network service — move to clear sky; try for CSQ >= 2.");
+    // Optional: print parsed status in your chosen mode
+    #if IF_COMPACT
+      printSBDIXCompact();
+    #elif IF_VERBOSE
+      printSBDIXLegendOnce(); printSBDIXVerbose();
+    #endif
+
+    // Treat MO success (0) and "success, MT pending" (1) as success
+    if (gMOStatus == 0 || gMOStatus == 1) {
+      // Prevent re-sending the same payload on future retries
+      modem.clearBuffers(ISBD_CLEAR_MO);
+
+      // Success UX
+      pixelSetMode(MODE_SUCCESS);
+      successUntil = millis() + SUCCESS_HOLD_MS;
+
+      gSBDIXSeen = false;
+      return true;  // STOP RETRIES
+    }
+
+    // Helpful hint for the common failure you’re seeing
+    if (gMOStatus == 32) {
+      SerialMon.println("Hint: No network service — move to clear sky; try for CSQ >= 2.");
+    }
+
     gSBDIXSeen = false;
   }
 
+  // 3) Fall back to library return code if no definitive SBDIX success
   if (err != ISBD_SUCCESS) {
-    /***   ON FAILURE   ***/
     SerialMon.print("SBD send/receive failed, err=");
     SerialMon.print(err);
     SerialMon.print(".\tReason:");
@@ -324,30 +347,27 @@ static bool sendTextWithIndicators(const char *text) {
       case ISBD_MSG_TOO_LONG:        SerialMon.println("Message too long."); break;
       default:                       SerialMon.println("Unknown error."); break;
     }
-
-    pixelSetMode(MODE_FAIL); // red solid during caller's retry delay
+    pixelSetMode(MODE_FAIL);
     return false;
-
-    /***   ON SUCCESS   ***/
-    // ReSharper disable once CppRedundantElseKeywordInsideCompoundStatement
-  } else {
-    // Print SBDIX status
-    SerialMon.println("Send OK.");
-    if (mtLen > 0) {
-      SerialMon.print("Received "); SerialMon.print(mtLen); SerialMon.println(" byte(s):");
-      for (size_t i = 0; i < mtLen; ++i) {
-        if (const uint8_t b = mt[i]; b >= 32 && b <= 126) SerialMon.write(static_cast<char>(b)); else SerialMon.print(".");
-      }
-      SerialMon.println();
-    } else {
-      SerialMon.println("No MT message queued.");
-    }
-
-    // SUCCESS: green for 10s (non-blocking), then off
-    pixelSetMode(MODE_SUCCESS);
-    successUntil = millis() + SUCCESS_HOLD_MS;
-    return true;
   }
+
+  // 4) Normal success path (err == ISBD_SUCCESS and no SBDIX override)
+  SerialMon.println("Send OK.");
+  if (mtLen > 0) {
+    SerialMon.print("Received "); SerialMon.print(mtLen); SerialMon.println(" byte(s):");
+    for (size_t i = 0; i < mtLen; ++i) {
+      const uint8_t b = mt[i];
+      if (b >= 32 && b <= 126) SerialMon.write(static_cast<char>(b));
+      else SerialMon.print(".");
+    }
+    SerialMon.println();
+  } else {
+    SerialMon.println("No MT message queued.");
+  }
+
+  pixelSetMode(MODE_SUCCESS);
+  successUntil = millis() + SUCCESS_HOLD_MS;
+  return true;
 }
 
 // edge detection for active-LOW buttons
@@ -370,10 +390,13 @@ void loop() {
 
   if (const unsigned long now = millis(); now - lastBounceMs > 30) {
     if (edgePressed(curAlert, lastAlert)) {
+      static uint retryCountAlert = 0;
       SerialMon.println("ALERT button pressed.");
       while (true) {
         if (sendTextWithIndicators("ALERT")) break; // if OK (success)
-        SerialMon.println("Retrying after delay...\n\n");
+        SerialMon.print("Retry count ");
+        SerialMon.print(retryCountAlert++);
+        SerialMon.println(".\tRetrying after delay...\n\n");
         const unsigned long t0 = millis();
         pixelSetMode(MODE_FAIL); // red during wait
         while (millis() - t0 < RETRY_DELAY_MS) { delay(10); }
@@ -381,10 +404,13 @@ void loop() {
     }
 
     if (edgePressed(curSOS, lastSOS)) {
+      static uint retryCountSOS = 0;
       SerialMon.println("SOS button pressed.");
       while (true) {
         if (sendTextWithIndicators("SOS")) break;   // if OK (success)
-        SerialMon.println("Retrying after delay...\n\n");
+        SerialMon.print("Retry count ");
+        SerialMon.print(retryCountSOS++);
+        SerialMon.println(".\tRetrying after delay...\n\n");
         const unsigned long t0 = millis();
         pixelSetMode(MODE_FAIL);
         while (millis() - t0 < RETRY_DELAY_MS) { delay(10); }
