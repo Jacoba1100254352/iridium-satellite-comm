@@ -370,9 +370,12 @@ void loop() {
 
   if (const unsigned long now = millis(); now - lastBounceMs > 30) {
     if (edgePressed(curAlert, lastAlert)) {
+      static uint retryCountAlert = 0;
       SerialMon.println("ALERT button pressed.");
       while (true) {
         if (sendTextWithIndicators("ALERT")) break; // if OK (success)
+        SerialMon.print("Retry count ");
+        SerialMon.print(retryCountAlert++);
         SerialMon.println("Retrying after delay...\n\n");
         const unsigned long t0 = millis();
         pixelSetMode(MODE_FAIL); // red during wait
@@ -381,9 +384,12 @@ void loop() {
     }
 
     if (edgePressed(curSOS, lastSOS)) {
+      static uint retryCountSOS = 0;
       SerialMon.println("SOS button pressed.");
       while (true) {
         if (sendTextWithIndicators("SOS")) break;   // if OK (success)
+        SerialMon.print("Retry count ");
+        SerialMon.print(retryCountSOS++);
         SerialMon.println("Retrying after delay...\n\n");
         const unsigned long t0 = millis();
         pixelSetMode(MODE_FAIL);
