@@ -1,10 +1,8 @@
 #include <Adafruit_NeoPixel.h>
 #include <Arduino.h>
 #include <IridiumSBD.h>
+#include "../include/config.h"
 #include "../include/print_functions.h"
-
-#define DIAGNOSTICS true
-#define SerialMon Serial
 
 // =========================
 // Buttons (active-LOW to GND)
@@ -68,43 +66,68 @@ IridiumSBD modem(Serial1);
 
 #if DIAGNOSTICS
 // void ISBDConsoleCallback(IridiumSBD *d, const char c) { SerialMon.write(c); }
-void ISBDConsoleCallback(IridiumSBD *d, char c) {
-  SerialMon.write(c); // keep the raw pass-through
+void ISBDConsoleCallback(IridiumSBD *d, const char c) {
+  // Only echo raw characters in VERBOSE
+  #if IF_VERBOSE
+  SerialMon.write(c);
+  #endif
 
-  static char line[96];
+  static char line[128];
   static uint8_t idx = 0;
 
-  if (c == '\r') return; // ignore CR
+  if (c == '\r') return;
   if (c == '\n') {
     line[idx] = '\0';
     idx = 0;
 
-    // Look for: +SBDIX: a, b, c, d, e, f
-    if (strncmp(line, "+SBDIX:", 7) == 0) {
-      int a, b, c2, d, e, f;
-      // Be tolerant of spaces
-      if (sscanf(line + 7, " %d , %d , %d , %d , %d , %d", &a, &b, &c2, &d, &e, &f) == 6) {
-        gMOStatus = a; gMOMSN = b; gMTStatus = c2; gMTMSN = d; gMTLen = e; gMTQueued = f;
-        gSBDIXSeen = true;
+    if (line[0] != '\0') {
+      // Pretty-print (COMPACT/VERBOSE)
+      #if IF_COMPACT
+      diagIngestConsoleLine(line);
+      #endif
 
-        printSBDIXCompact();
-        #if DIAGNOSTICS
-          printSBDIXLegendOnce();
-          printSBDIXVerbose();
-        #endif
+      // Parse +SBDIX and emit compact/verbose status
+      if (strncmp(line, "+SBDIX:", 7) == 0) {
+        int a, b, c2, d2, e, f;
+        if (sscanf(line + 7, " %d , %d , %d , %d , %d , %d", &a, &b, &c2, &d2, &e, &f) == 6) {
+          gMOStatus = a; gMOMSN = b; gMTStatus = c2; gMTMSN = d2; gMTLen = e; gMTQueued = f;
+          gSBDIXSeen = true;
+
+          #if IF_COMPACT
+          printSBDIXCompact();
+          #elif IF_VERBOSE
+          printSBDIXLegendOnce(); printSBDIXVerbose();
+          #endif
+        }
       }
     }
     return;
   }
 
-  if (idx < sizeof(line) - 1) {
-    line[idx++] = c;
-  } else {
-    // overflow: reset
-    idx = 0;
-  }
+  if (idx < sizeof(line) - 1) line[idx++] = c; else idx = 0; // guard overflow
 }
-void ISBDDiagsCallback(IridiumSBD *d, const char c)    { SerialMon.write(c); }
+void ISBDDiagsCallback(IridiumSBD *d, char c) {
+  #if IF_VERBOSE
+  SerialMon.write(c); // raw only in verbose
+  #endif
+
+  static char line[128];
+  static uint8_t idx = 0;
+
+  if (c == '\r') return;
+  if (c == '\n') {
+    line[idx] = '\0';
+    idx = 0;
+    #if IF_VERBOSE
+      if (line[0] != '\0') {
+        SerialMon.print("DBG: "); SerialMon.println(line);
+      }
+    #endif
+    return;
+  }
+
+  if (idx < sizeof(line) - 1) line[idx++] = c; else idx = 0;
+}
 #endif
 
 // Forward decls
@@ -215,7 +238,7 @@ void setup() {
   modem.useMSSTMWorkaround(true);
 
   /// Optional: enable diagnostic console output
-#if DIAGNOSTICS
+#if IF_VERBOSE
   SerialMon.println();
   SerialMon.println("SBDIX fields explanation:");
   SerialMon.println("  MO-status:  Mobile Originated status (e.g., 0=success, 32=no network service)");
@@ -225,9 +248,12 @@ void setup() {
   SerialMon.println("  MT-length:  Length in bytes of the received Mobile Terminated message");
   SerialMon.println("  MT-queued:  Number of pending Mobile Terminated messages still waiting on the server");
   SerialMon.println();
+
+  // Hook up console and diag callbacks
+  printModemGlossaryOnce();
 #endif
 
-  SerialMon.println("Press D9 (ALERT) or D8 (SOS) to send.");
+  SerialMon.println("Press D9 (ALERT) or D8 (SOS) to send.\n\n\n");
 }
 
 // Build small MO payload: [len8][ASCII bytes...], perform send+receive, and drive NeoPixel states.
@@ -248,18 +274,39 @@ static bool sendTextWithIndicators(const char *text) {
   // Send/receive SBD
   const int err = modem.sendReceiveSBDBinary(mo, 1 + len, mt, mtLen);
   if (gSBDIXSeen) {
-    printSBDIXCompact();
-    #if DIAGNOSTICS
-      printSBDIXVerbose();
-    #endif
-    gSBDIXSeen = false; // reset after printing
+// #ifdef IF_COMPACT
+//     printSBDIXCompact();
+// #elifdef IF_VERBOSE
+//     printSBDIXVerbose();
+// #else
+//     // No extra printing
+// #endif
+//     if (gMOStatus == 32) SerialMon.println("Hint: No network service — move to clear sky; try for CSQ >= 2.");
+    gSBDIXSeen = false;
   }
 
   if (err != ISBD_SUCCESS) {
     /***   ON FAILURE   ***/
     SerialMon.print("SBD send/receive failed, err=");
-    SerialMon.println(err);
-    if (err == ISBD_SENDRECEIVE_TIMEOUT) SerialMon.println("Timeout.");
+    SerialMon.print(err);
+    SerialMon.print(".\tReason:");
+    switch (err) {
+      case ISBD_ALREADY_AWAKE:       SerialMon.println("Already awake."); break;
+      case ISBD_SERIAL_FAILURE:      SerialMon.println("Serial failure."); break;
+      case ISBD_PROTOCOL_ERROR:      SerialMon.println("Protocol error."); break;
+      case ISBD_CANCELLED:           SerialMon.println("Cancelled by callback."); break;
+      case ISBD_NO_MODEM_DETECTED:   SerialMon.println("No modem detected."); break;
+      case ISBD_SBDIX_FATAL_ERROR:   SerialMon.println("SBDIX fatal error."); break;
+      case ISBD_SENDRECEIVE_TIMEOUT: SerialMon.println("Timeout."); break;
+      case ISBD_RX_OVERFLOW:         SerialMon.println("Receive overflow."); break;
+      case ISBD_REENTRANT:           SerialMon.println("Reentrant call."); break;
+      case ISBD_IS_ASLEEP:           SerialMon.println("Modem is asleep."); break;
+      case ISBD_NO_SLEEP_PIN:        SerialMon.println("No sleep pin configured."); break;
+      case ISBD_NO_NETWORK:          SerialMon.println("No network service."); break;
+      case ISBD_MSG_TOO_LONG:        SerialMon.println("Message too long."); break;
+      default:                       SerialMon.println("Unknown error."); break;
+    }
+
     pixelSetMode(MODE_FAIL); // red solid during caller's retry delay
     return false;
 
@@ -308,7 +355,7 @@ void loop() {
       SerialMon.println("ALERT button pressed.");
       while (true) {
         if (sendTextWithIndicators("ALERT")) break; // if OK (success)
-        SerialMon.println("Retrying after delay...");
+        SerialMon.println("Retrying after delay...\n\n");
         const unsigned long t0 = millis();
         pixelSetMode(MODE_FAIL); // red during wait
         while (millis() - t0 < RETRY_DELAY_MS) { delay(10); }
@@ -319,7 +366,7 @@ void loop() {
       SerialMon.println("SOS button pressed.");
       while (true) {
         if (sendTextWithIndicators("SOS")) break;   // if OK (success)
-        SerialMon.println("Retrying after delay...");
+        SerialMon.println("Retrying after delay...\n\n");
         const unsigned long t0 = millis();
         pixelSetMode(MODE_FAIL);
         while (millis() - t0 < RETRY_DELAY_MS) { delay(10); }
