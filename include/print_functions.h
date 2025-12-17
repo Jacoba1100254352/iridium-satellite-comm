@@ -1,7 +1,3 @@
-//
-// Created by Jacob Anderson on 11/11/25.
-//
-
 #ifndef IRIDIUM_SATELLITE_COMM_PRINT_FUNCTIONS_H
 #define IRIDIUM_SATELLITE_COMM_PRINT_FUNCTIONS_H
 

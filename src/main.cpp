@@ -1,6 +1,12 @@
 #include <Adafruit_NeoPixel.h>
 #include <Arduino.h>
 #include <IridiumSBD.h>
+
+#if defined(ARDUINO_ARCH_RP2040)
+// Arduino-Pico bundles the Pico SDK, so we can use sleep_ms() for low-power waits.  [oai_citation:0‡Arduino-Pico](https://arduino-pico.readthedocs.io/en/latest/sdk.html)
+  #include "pico/stdlib.h"
+#endif
+
 #include "../include/config.h"
 #include "../include/print_functions.h"
 
@@ -11,19 +17,20 @@ static constexpr int BTN_ALERT = 9;   // D9 → GND sends "ALERT"
 static constexpr int BTN_SOS   = 8;   // D8 → GND sends "SOS"
 
 // =========================
-// Timing
+// Timing (override in config.h via CFG_* macros)
 // =========================
-static constexpr unsigned long RETRY_DELAY_MS   = 10000UL; // keep FAIL shown during this delay
-static constexpr unsigned long SUCCESS_HOLD_MS  = 10000UL; // green hold after success
-static constexpr unsigned long WAIT_BLINK_MS    = 250UL;   // yellow blink period
+static constexpr unsigned long kRetryDelayMs    = CFG_RETRY_DELAY_MS;
+static constexpr unsigned long kSuccessHoldMs   = CFG_SUCCESS_HOLD_MS;
+static constexpr unsigned long kWaitBlinkMs     = CFG_WAIT_BLINK_MS;
 
 // =========================
 // NeoPixel (KB2040 onboard)
 // =========================
 #define NUMPIXELS 1
 Adafruit_NeoPixel pixels(NUMPIXELS, PIN_NEOPIXEL, NEO_GRB + NEO_KHZ800);
+
 #if defined(NEOPIXEL_POWER)
-  static const int NEOPIXEL_PWR = NEOPIXEL_POWER;
+static const int NEOPIXEL_PWR = NEOPIXEL_POWER;
 #endif
 
 // Quick color helpers
@@ -36,13 +43,13 @@ static uint32_t C_OFF()    { return Adafruit_NeoPixel::Color(0,   0,   0  ); }
 // State / Types
 // =========================
 enum PixelMode : uint8_t { MODE_IDLE, MODE_WAITING, MODE_FAIL, MODE_SUCCESS };
-static volatile PixelMode pixelMode = MODE_IDLE;
-static volatile bool waitBlinkOn = false;
+static PixelMode pixelMode = MODE_IDLE;
+static bool waitBlinkOn = false;
 static unsigned long lastBlinkToggle = 0;
 static unsigned long successUntil = 0;
 
 // SBDIX status (updated by console callback)
-static volatile bool gLastMOSuccess = false;
+// static volatile bool gLastMOSuccess = false;
 
 // Debounce
 static bool lastAlert = true; // pullup idle HIGH
@@ -52,25 +59,21 @@ static unsigned long lastBounceMs = 0;
 // =========================
 // RockBLOCK on Serial1 (UART0: TX=D0, RX=D1)
 // =========================
-// Optional: define sleep and ring pins for power and wake control.  If you attach
-// these pins to your microcontroller and RockBLOCK, uncomment the definitions
-// below and set the numbers to match your wiring.  The sleep pin should connect
-// to the RockBLOCK ON_OFF (or SLP) line, and the ring pin should connect to
-// the RockBLOCK RI output.
-// static constexpr int PIN_ISBD_SLEEP = 7;   // microcontroller pin for ON_OFF / SLP
-// static constexpr int PIN_ISBD_RI    = 6;   // microcontroller pin for RI (active low)
+// POWER NOTE (RockBLOCK v3.F+): the SLP pin requires special attention when interfacing
+// with 3.3V logic. See Adafruit's RockBLOCK guide.  [oai_citation:1‡Invalid URL](data:text/plain;charset=utf-8,Invalid%20citation)
 //
-// When both pins are defined, construct the modem with:
-// IridiumSBD modem(Serial1, PIN_ISBD_SLEEP, PIN_ISBD_RI);
-// and then call modem.enableRingAlerts(true) in setup().
-//
-// In the current configuration no extra pins are attached, so use the basic constructor:
+// If you wire the SLP pin, define PIN_ISBD_SLEEP in config.h and the modem can be put
+// into low power sleep and woken on-demand.
+#if (PIN_ISBD_SLEEP >= 0) && (PIN_ISBD_RI >= 0)
+IridiumSBD modem(Serial1, PIN_ISBD_SLEEP, PIN_ISBD_RI);
+#elif (PIN_ISBD_SLEEP >= 0)
+IridiumSBD modem(Serial1, PIN_ISBD_SLEEP);
+#else
 IridiumSBD modem(Serial1);
+#endif
 
 #if DIAGNOSTICS
-// void ISBDConsoleCallback(IridiumSBD *d, const char c) { SerialMon.write(c); }
 void ISBDConsoleCallback(IridiumSBD *d, const char c) {
-  // Only echo raw characters in VERBOSE
 #if IF_VERBOSE
   SerialMon.write(c);
 #endif
@@ -84,9 +87,7 @@ void ISBDConsoleCallback(IridiumSBD *d, const char c) {
     idx = 0;
 
     if (line[0] != '\0') {
-#if !IF_VERBOSE   // Avoid duplicate lines in VERBOSE mode
-      // Always echo raw key modem lines so logs show original then parsed
-      // (unconditional: printed in all log modes)
+#if !IF_VERBOSE
       if (strncmp(line, "+SBDIX:", 7) == 0) {
         SerialMon.print("<< ");
         SerialMon.println(line);
@@ -112,13 +113,14 @@ void ISBDConsoleCallback(IridiumSBD *d, const char c) {
 #endif
         }
       }
-      gLastMOSuccess = (gMOStatus == 0);
+      // gLastMOSuccess = (gMOStatus == 0);
     }
     return;
   }
 
   if (idx < sizeof(line) - 1) line[idx++] = c; else idx = 0; // guard overflow
 }
+
 void ISBDDiagsCallback(IridiumSBD *d, char c) {
 #if IF_VERBOSE
   SerialMon.write(c); // raw only in verbose
@@ -132,9 +134,9 @@ void ISBDDiagsCallback(IridiumSBD *d, char c) {
     line[idx] = '\0';
     idx = 0;
 #if IF_VERBOSE
-      if (line[0] != '\0') {
-        SerialMon.print("DBG: "); SerialMon.println(line);
-      }
+    if (line[0] != '\0') {
+      SerialMon.print("DBG: "); SerialMon.println(line);
+    }
 #endif
     return;
   }
@@ -148,8 +150,56 @@ static void pixelShowColor(uint32_t c);
 static void pixelSetMode(PixelMode mode);
 static bool sendTextWithIndicators(const char *text);
 
+static void lowPowerDelayMs(uint32_t ms);
+static void pixelPowerOn();
+static void pixelPowerOff();
+static void applyModemSettings();
+static bool ensureModemAwake();
+static void sleepModemBestEffort();
+
+// ---------- Low-power delay ----------
+static void lowPowerDelayMs(uint32_t ms) {
+#if defined(ARDUINO_ARCH_RP2040)
+  // sleep_ms() is Pico SDK; it idles efficiently vs tight spinning.  [oai_citation:2‡Arduino-Pico](https://arduino-pico.readthedocs.io/en/latest/sdk.html)
+  while (ms) {
+    const uint32_t chunk = (ms > 1000) ? 1000 : ms;
+    sleep_ms(chunk);
+    ms -= chunk;
+  }
+#else
+  while (ms) {
+    const uint32_t chunk = (ms > 1000) ? 1000 : ms;
+    delay(chunk);
+    ms -= chunk;
+  }
+#endif
+}
+
+// ---------- NeoPixel power gating ----------
+static void pixelPowerOn() {
+#if defined(NEOPIXEL_POWER)
+  if (ENABLE_NEOPIXEL_POWER_GATING) {
+    digitalWrite(NEOPIXEL_PWR, HIGH);
+    // tiny settle helps avoid first-frame weirdness on some boards
+    delayMicroseconds(200);
+  }
+#endif
+}
+
+static void pixelPowerOff() {
+#if defined(NEOPIXEL_POWER)
+  if (ENABLE_NEOPIXEL_POWER_GATING) {
+    // Turn LED off *then* remove power.
+    pixels.fill(C_OFF());
+    pixels.show();
+    digitalWrite(NEOPIXEL_PWR, LOW);
+  }
+#endif
+}
+
 // ---------- Pixel helpers ----------
 static void pixelShowColor(const uint32_t c) {
+  pixelPowerOn();
   pixels.fill(c);
   pixels.show();
 }
@@ -159,6 +209,7 @@ static void pixelSetMode(const PixelMode mode) {
   switch (mode) {
     case MODE_IDLE:
       pixelShowColor(C_OFF());
+      pixelPowerOff();
       break;
     case MODE_WAITING:
       waitBlinkOn = false;
@@ -178,7 +229,7 @@ static void pixelSetMode(const PixelMode mode) {
 // Blink yellow while waiting.
 bool ISBDCallback() {
   if (pixelMode == MODE_WAITING) {
-    if (const unsigned long now = millis(); now - lastBlinkToggle >= WAIT_BLINK_MS) {
+    if (const unsigned long now = millis(); now - lastBlinkToggle >= kWaitBlinkMs) {
       waitBlinkOn = !waitBlinkOn;
       pixelShowColor(waitBlinkOn ? C_YELLOW() : C_OFF());
       lastBlinkToggle = now;
@@ -187,150 +238,93 @@ bool ISBDCallback() {
   return true; // never cancel
 }
 
-static void waitForSerial(unsigned long ms = 4000) {
+static void waitForSerialIfEnabled() {
+  if constexpr (WAIT_FOR_USB_SERIAL_MS == 0) return;
   const unsigned long start = millis();
-  while (!SerialMon && (millis() - start < ms)) { delay(10); }
+  while (!SerialMon && (millis() - start < WAIT_FOR_USB_SERIAL_MS)) { delay(10); }
 }
 
-void setup() {
-  // Buttons: active-LOW to GND
-  pinMode(BTN_ALERT, INPUT_PULLUP);
-  pinMode(BTN_SOS,   INPUT_PULLUP);
-
-  // USB Serial
-  SerialMon.begin(115200);
-  waitForSerial();
-
-  // NeoPixel power (if present) and init
-#if defined(NEOPIXEL_POWER)
-    pinMode(NEOPIXEL_PWR, OUTPUT);
-    digitalWrite(NEOPIXEL_PWR, HIGH);
-#endif
-  pixels.begin();
-  // pixels.setBrightness(50);
-  pixels.setBrightness(8);    // Dim for battery conservation
-  pixelSetMode(MODE_IDLE);
-
-  // RockBLOCK UART
-  Serial1.begin(19200);  // D0/D1 default UART0
-
-  SerialMon.println("KB2040 + RockBLOCK + NeoPixel (WAIT=blink yellow, FAIL=red, SUCCESS=green)");
-
-  int err = modem.begin();
-  if (err != ISBD_SUCCESS) {
-    SerialMon.print("modem.begin() failed, err="); SerialMon.println(err);
-    if (err == ISBD_NO_MODEM_DETECTED) SerialMon.println("No modem detected.");
-    pixelSetMode(MODE_FAIL);
-    while (true) { delay(1000); }
-  }
-
-  char fw[16] = {};
-  err = modem.getFirmwareVersion(fw, sizeof(fw));
-  if (err == ISBD_SUCCESS) {
-    SerialMon.print("FW: "); SerialMon.println(fw);
-  }
-
-  int csq = -1;
-  err = modem.getSignalQuality(csq);
-  if (err == ISBD_SUCCESS) {
-    SerialMon.print("Signal quality (0-5): "); SerialMon.println(csq);
-  }
-
-  /***   POWER EFFICIENCY SETTINGS   ***/
-  // Adjust modem timeouts and power profile for battery efficiency.  These settings
-  // shorten timeouts so the radio does not stay powered longer than necessary.  Feel
-  // free to tune these values based on your environment.
+// ---------- Modem helpers ----------
+static void applyModemSettings() {
   modem.setPowerProfile(IridiumSBD::DEFAULT_POWER_PROFILE);
-  // Aggressive Timeouts:
-  // modem.adjustATTimeout(10);
-  // modem.adjustSendReceiveTimeout(120);
-  // modem.adjustStartupTimeout(60);
-  // modem.adjustSBDSessionTimeout(180);
-
-  // Balanced Timeouts:
-  modem.adjustATTimeout(30);
-  modem.adjustSendReceiveTimeout(300);   // 5 min
-  modem.adjustStartupTimeout(120);
-  modem.adjustSBDSessionTimeout(420);    // 7 min
-
-  // TODO: Enable ring alerts when a ring indicator pin is attached.
-  // modem.enableRingAlerts(true);
-  // Keep the MSSTM workaround enabled.
-  // FIXME: this currently causes the << +SBDIX: 32, 6, 2, 0, 0, 0 line to not appear
-  // modem.useMSSTMWorkaround(true);
-
-  /// Optional: enable diagnostic console output
-#if !IF_QUIET
-  SerialMon.println();
-  SerialMon.println("SBDIX fields explanation:");
-  SerialMon.println("  MO-status:  Mobile Originated status (e.g., 0=success, 32=no network service)");
-  SerialMon.println("  MOMSN:      Mobile Originated Message Sequence Number (increments with each send)");
-  SerialMon.println("  MT-status:  Mobile Terminated status (0=no message, 1=message received, 2=error)");
-  SerialMon.println("  MTMSN:      Mobile Terminated Message Sequence Number (for the received message)");
-  SerialMon.println("  MT-length:  Length in bytes of the received Mobile Terminated message");
-  SerialMon.println("  MT-queued:  Number of pending Mobile Terminated messages still waiting on the server");
-  SerialMon.println();
-
-  // Hook up console and diag callbacks
-  printModemGlossaryOnce();
-#endif
-
-  SerialMon.println("Press D9 (ALERT) or D8 (SOS) to send.\n\n\n");
+  modem.adjustATTimeout(CFG_MODEM_AT_TIMEOUT_S);
+  modem.adjustSendReceiveTimeout(CFG_MODEM_SENDRECV_TIMEOUT_S);
+  modem.adjustStartupTimeout(CFG_MODEM_STARTUP_TIMEOUT_S);
+  modem.adjustSBDSessionTimeout(CFG_MODEM_SESSION_TIMEOUT_S);
 }
 
-// Build small MO payload: [len8][ASCII bytes...], perform send+receive, and drive NeoPixel states.
+static bool ensureModemAwake() {
+#if (PIN_ISBD_SLEEP < 0) && (ENABLE_MODEM_SLEEP == 1)
+  // No sleep pin wired; can't do real sleep/wake cycling.
+#endif
+
+  const int err = modem.begin();
+  if (err == ISBD_SUCCESS || err == ISBD_ALREADY_AWAKE) {
+    applyModemSettings();
+#if (PIN_ISBD_RI >= 0)
+    modem.enableRingAlerts(true);
+#endif
+    return true;
+  }
+
+#if !IF_QUIET
+  SerialMon.print("modem.begin() failed, err="); SerialMon.println(err);
+  if (err == ISBD_NO_MODEM_DETECTED) SerialMon.println("No modem detected.");
+#endif
+  return false;
+}
+
+static void sleepModemBestEffort() {
+  if constexpr (ENABLE_MODEM_SLEEP != 1) return;
+
+  // IridiumSBD::sleep() will only work if a sleep pin was provided to the modem constructor.  [oai_citation:3‡GitHub](https://github.com/mikalhart/IridiumSBD/blob/master/src/IridiumSBD.cpp?utm_source=chatgpt.com)
+  const int err = modem.sleep();
+  (void)err; // best-effort: ignore errors (e.g., ISBD_NO_SLEEP_PIN)
+}
+
+// Build small MO payload: [len8][ASCII bytes...], perform send, and drive NeoPixel states.
 static bool sendTextWithIndicators(const char *text) {
+  if (!ensureModemAwake()) {
+    pixelSetMode(MODE_FAIL);
+    return false;
+  }
+
   size_t len = strlen(text);
   if (len > 110) len = 110;
   uint8_t mo[1 + 110] = {};
   mo[0] = static_cast<uint8_t>(len);
   memcpy(&mo[1], text, len);
 
-  uint8_t mt[270];
-  size_t mtLen = sizeof(mt);
+  // Reset parsed SBDIX state so we don't read stale values on a timeout.
+  gSBDIXSeen = false;
+  gMOStatus = gMOMSN = gMTStatus = gMTMSN = gMTLen = gMTQueued = -1;
 
-  // Start WAITING (blink yellow)
+#if !IF_QUIET
   SerialMon.print("Sending \""); SerialMon.print(text); SerialMon.println("\"...");
+#endif
   pixelSetMode(MODE_WAITING);
 
-  // 1) Kick off the SBD session
-  const int err = modem.sendReceiveSBDBinary(mo, 1 + len, mt, mtLen);
+  int err = ISBD_PROTOCOL_ERROR;
 
-  // 2) If we saw an SBDIX line, prefer *its* truth over 'err'
-  if (gSBDIXSeen) {
-    // Optional: print parsed status in your chosen mode
-    #if IF_COMPACT
-      printSBDIXCompact();
-    #elif IF_VERBOSE
-      printSBDIXLegendOnce(); printSBDIXVerbose();
-    #endif
+#if (ENABLE_MT_RECEIVE == 1)
+  uint8_t mt[270];
+  size_t mtLen = sizeof(mt);
+  err = modem.sendReceiveSBDBinary(mo, 1 + len, mt, mtLen);
+#else
+  // Send-only is usually faster/cheaper (no MT retrieval) when you don't need inbound messages.
+  err = modem.sendSBDBinary(mo, 1 + len);
+#endif
 
-    // Treat MO success (0) and "success, MT pending" (1) as success
-    if (gMOStatus == 0 || gMOStatus == 1) {
-      // Prevent re-sending the same payload on future retries
-      modem.clearBuffers(ISBD_CLEAR_MO);
+  const bool sawSBDIX = gSBDIXSeen;
+  const int  moStatus = gMOStatus;
+  gSBDIXSeen = false;
 
-      // Success UX
-      pixelSetMode(MODE_SUCCESS);
-      successUntil = millis() + SUCCESS_HOLD_MS;
+  const bool moReportedSuccess = sawSBDIX && (moStatus == 0 || moStatus == 1);
+  const bool timedOutButSent   = (err == ISBD_SENDRECEIVE_TIMEOUT && moReportedSuccess);
 
-      gSBDIXSeen = false;
-      return true;  // STOP RETRIES
-    }
-
-    // Helpful hint for the common failure you’re seeing
-    if (gMOStatus == 32) {
-      SerialMon.println("Hint: No network service — move to clear sky; try for CSQ >= 2.");
-    }
-
-    gSBDIXSeen = false;
-  }
-
-  // 3) Fall back to library return code if no definitive SBDIX success
-  if (err != ISBD_SUCCESS) {
-    SerialMon.print("SBD send/receive failed, err=");
-    SerialMon.print(err);
-    SerialMon.print(".\tReason:");
+  if (err != ISBD_SUCCESS && !timedOutButSent) {
+#if !IF_QUIET
+    SerialMon.print("SBD send failed, err="); SerialMon.print(err); SerialMon.print(".\tReason:");
     switch (err) {
       case ISBD_ALREADY_AWAKE:       SerialMon.println("Already awake."); break;
       case ISBD_SERIAL_FAILURE:      SerialMon.println("Serial failure."); break;
@@ -347,26 +341,34 @@ static bool sendTextWithIndicators(const char *text) {
       case ISBD_MSG_TOO_LONG:        SerialMon.println("Message too long."); break;
       default:                       SerialMon.println("Unknown error."); break;
     }
+    if (sawSBDIX) {
+      SerialMon.print("MO-status from modem: ");
+      SerialMon.print(moStatus);
+      SerialMon.print(" (");
+      SerialMon.print(moStatusToStr(moStatus));
+      SerialMon.println(")");
+      if (moStatus == 32) SerialMon.println("Hint: No network service — move to clear sky; try for CSQ >= 2.");
+    }
+#endif
+
     pixelSetMode(MODE_FAIL);
+    sleepModemBestEffort();
     return false;
   }
 
-  // 4) Normal success path (err == ISBD_SUCCESS and no SBDIX override)
-  SerialMon.println("Send OK.");
-  if (mtLen > 0) {
-    SerialMon.print("Received "); SerialMon.print(mtLen); SerialMon.println(" byte(s):");
-    for (size_t i = 0; i < mtLen; ++i) {
-      const uint8_t b = mt[i];
-      if (b >= 32 && b <= 126) SerialMon.write(static_cast<char>(b));
-      else SerialMon.print(".");
-    }
-    SerialMon.println();
-  } else {
-    SerialMon.println("No MT message queued.");
+#if !IF_QUIET
+  if (timedOutButSent) SerialMon.println("Send OK (modem reported MO success after timeout).");
+  else                 SerialMon.println("Send OK.");
+  if (sawSBDIX) {
+    SerialMon.print("MO-status="); SerialMon.print(moStatus); SerialMon.print(" ("); SerialMon.print(moStatusToStr(moStatus)); SerialMon.println(")");
   }
+#endif
 
   pixelSetMode(MODE_SUCCESS);
-  successUntil = millis() + SUCCESS_HOLD_MS;
+  successUntil = millis() + kSuccessHoldMs;
+
+  // Immediately sleep the modem after a successful send.
+  sleepModemBestEffort();
   return true;
 }
 
@@ -377,8 +379,61 @@ static bool edgePressed(const bool current, bool &last) {
   return pressed;
 }
 
+static unsigned long computeRetryDelayMs(const int err, const int moStatus, const bool sawSBDIX) {
+  // Fast-ish retry for transient errors; slower for "no network service".
+  if (sawSBDIX && moStatus == 32) return CFG_RETRY_DELAY_NO_NETWORK_MS;
+  if (err == ISBD_SENDRECEIVE_TIMEOUT) return CFG_RETRY_DELAY_TIMEOUT_MS;
+  return kRetryDelayMs;
+}
+
+void setup() {
+  // Buttons: active-LOW to GND
+  pinMode(BTN_ALERT, INPUT_PULLUP);
+  pinMode(BTN_SOS,   INPUT_PULLUP);
+
+  // USB Serial
+  SerialMon.begin(115200);
+  waitForSerialIfEnabled();
+
+  // NeoPixel init + power pin
+#if defined(NEOPIXEL_POWER)
+  pinMode(NEOPIXEL_PWR, OUTPUT);
+  // start with NeoPixel power OFF
+  digitalWrite(NEOPIXEL_PWR, LOW);
+#endif
+  pixels.begin();
+  pixels.setBrightness(CFG_NEOPIXEL_BRIGHTNESS);
+  pixelSetMode(MODE_IDLE);
+
+  // RockBLOCK UART
+  Serial1.begin(19200);
+
+  // If sleep pin is wired, keep modem asleep/off until we actually need to send.
+#if (PIN_ISBD_SLEEP >= 0)
+  pinMode(PIN_ISBD_SLEEP, OUTPUT);
+  digitalWrite(PIN_ISBD_SLEEP, LOW);
+#endif
+
+#if !IF_QUIET
+  SerialMon.println("KB2040 + RockBLOCK + NeoPixel (WAIT=blink yellow, FAIL=red, SUCCESS=green)");
+  SerialMon.println("Press D9 (ALERT) or D8 (SOS) to send.\n\n\n");
+
+  SerialMon.println();
+  SerialMon.println("SBDIX fields explanation:");
+  SerialMon.println("  MO-status:  Mobile Originated status (e.g., 0=success, 32=no network service)");
+  SerialMon.println("  MOMSN:      Mobile Originated Message Sequence Number (increments with each send)");
+  SerialMon.println("  MT-status:  Mobile Terminated status (0=no message, 1=message received, 2=error)");
+  SerialMon.println("  MTMSN:      Mobile Terminated Message Sequence Number (for the received message)");
+  SerialMon.println("  MT-length:  Length in bytes of the received Mobile Terminated message");
+  SerialMon.println("  MT-queued:  Number of pending Mobile Terminated messages still waiting on the server");
+  SerialMon.println();
+
+  printModemGlossaryOnce();
+#endif
+}
+
 void loop() {
-  // Manage SUCCESS hold duration
+  // End SUCCESS hold
   if (pixelMode == MODE_SUCCESS && successUntil != 0 && millis() >= successUntil) {
     pixelSetMode(MODE_IDLE);
     successUntil = 0;
@@ -390,34 +445,42 @@ void loop() {
 
   if (const unsigned long now = millis(); now - lastBounceMs > 30) {
     if (edgePressed(curAlert, lastAlert)) {
-      static uint retryCountAlert = 0;
+#if !IF_QUIET
       SerialMon.println("ALERT button pressed.");
+#endif
       while (true) {
-        if (sendTextWithIndicators("ALERT")) break; // if OK (success)
-        SerialMon.print("Retry count ");
-        SerialMon.print(retryCountAlert++);
-        SerialMon.println(".\tRetrying after delay...\n\n");
-        const unsigned long t0 = millis();
-        pixelSetMode(MODE_FAIL); // red during wait
-        while (millis() - t0 < RETRY_DELAY_MS) { delay(10); }
+        if (const bool ok = sendTextWithIndicators("ALERT"); ok) break;
+
+        // If we got here, send failed. Compute adaptive delay (often longer for no-network).
+        const unsigned long delayMs = computeRetryDelayMs(ISBD_PROTOCOL_ERROR, gMOStatus, gSBDIXSeen);
+#if !IF_QUIET
+        SerialMon.println("Retrying after delay...\n\n");
+#endif
+        pixelSetMode(MODE_FAIL);
+        lowPowerDelayMs(delayMs);
       }
     }
 
     if (edgePressed(curSOS, lastSOS)) {
-      static uint retryCountSOS = 0;
+#if !IF_QUIET
       SerialMon.println("SOS button pressed.");
+#endif
       while (true) {
-        if (sendTextWithIndicators("SOS")) break;   // if OK (success)
-        SerialMon.print("Retry count ");
-        SerialMon.print(retryCountSOS++);
-        SerialMon.println(".\tRetrying after delay...\n\n");
-        const unsigned long t0 = millis();
+        if (const bool ok = sendTextWithIndicators("SOS"); ok) break;
+
+        const unsigned long delayMs = computeRetryDelayMs(ISBD_PROTOCOL_ERROR, gMOStatus, gSBDIXSeen);
+#if !IF_QUIET
+        SerialMon.println("Retrying after delay...\n\n");
+#endif
         pixelSetMode(MODE_FAIL);
-        while (millis() - t0 < RETRY_DELAY_MS) { delay(10); }
+        lowPowerDelayMs(delayMs);
       }
     }
     lastBounceMs = now;
   }
 
-  // If mode is WAITING, the yellow blink is handled inside ISBDCallback()
+  // Idle: keep the MCU from spinning hot.
+  if (pixelMode == MODE_IDLE) {
+    lowPowerDelayMs(CFG_IDLE_POLL_MS);
+  }
 }
