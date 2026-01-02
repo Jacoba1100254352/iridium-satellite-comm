@@ -22,17 +22,7 @@
     </configurations>
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="57e4f083-aa23-42d0-b943-7e055edcfb81" name="Changes" comment="Adjusting the logs and log levels. Also implementing a temporary workaround to modem.useMSSTMWorkaround(true); not causing the correct lines to be printed. Need to fix later.">
-      <change afterPath="$PROJECT_DIR$/.idea/.gitignore" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/editor.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/editor.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/include/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/include/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/include/config.h" beforeDir="false" afterPath="$PROJECT_DIR$/include/config.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/include/print_functions.h" beforeDir="false" afterPath="$PROJECT_DIR$/include/print_functions.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/platformio.ini" beforeDir="false" afterPath="$PROJECT_DIR$/platformio.ini" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/main.cpp" afterDir="false" />
-    </list>
+    <list default="true" id="57e4f083-aa23-42d0-b943-7e055edcfb81" name="Changes" comment="Add .gitignore and enhance configuration for low-power operation" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -219,7 +209,7 @@
       <workItem from="1763212451283" duration="462000" />
       <workItem from="1765857448833" duration="400000" />
       <workItem from="1765857906022" duration="148000" />
-      <workItem from="1765858094574" duration="2464000" />
+      <workItem from="1765858094574" duration="2493000" />
     </task>
     <task id="LOCAL-00001" summary="Updating to use platformio">
       <option name="closed" value="true" />
@@ -253,7 +243,15 @@
       <option name="project" value="LOCAL" />
       <updated>1762923753722</updated>
     </task>
-    <option name="localTasksCounter" value="5" />
+    <task id="LOCAL-00005" summary="Add .gitignore and enhance configuration for low-power operation">
+      <option name="closed" value="true" />
+      <created>1765998207459</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1765998207459</updated>
+    </task>
+    <option name="localTasksCounter" value="6" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -264,7 +262,8 @@
     <MESSAGE value="Adding some efficiency measures and more instructional logging." />
     <MESSAGE value="Cleaning up the COMPACT logging view." />
     <MESSAGE value="Adjusting the logs and log levels. Also implementing a temporary workaround to modem.useMSSTMWorkaround(true); not causing the correct lines to be printed. Need to fix later." />
-    <option name="LAST_COMMIT_MESSAGE" value="Adjusting the logs and log levels. Also implementing a temporary workaround to modem.useMSSTMWorkaround(true); not causing the correct lines to be printed. Need to fix later." />
+    <MESSAGE value="Add .gitignore and enhance configuration for low-power operation" />
+    <option name="LAST_COMMIT_MESSAGE" value="Add .gitignore and enhance configuration for low-power operation" />
   </component>
   <component name="XSLT-Support.FileAssociations.UIState">
     <expand />
