@@ -35,7 +35,7 @@
 
 // ===== Power / energy knobs =====
 
-// Wait for USB Serial at boot (battery devices should be 0)
+// Wait for USB Serial at boot (set to 0 for fastest boot)
 #ifndef WAIT_FOR_USB_SERIAL_MS
   #define WAIT_FOR_USB_SERIAL_MS 0
 #endif
@@ -43,16 +43,16 @@
 // NeoPixel: power-gate the onboard NeoPixel using NEOPIXEL_POWER when available.
 // (KB2040 exposes a dedicated NeoPixel power control pin.)  [oai_citation:4‡Adafruit Learning System](https://learn.adafruit.com/adafruit-kb2040/circuitpython-pins-and-modules?utm_source=chatgpt.com)
 #ifndef ENABLE_NEOPIXEL_POWER_GATING
-  #define ENABLE_NEOPIXEL_POWER_GATING 1
+  #define ENABLE_NEOPIXEL_POWER_GATING 0
 #endif
 
 #ifndef CFG_NEOPIXEL_BRIGHTNESS
-  #define CFG_NEOPIXEL_BRIGHTNESS 8
+  #define CFG_NEOPIXEL_BRIGHTNESS 50
 #endif
 
 // Modem sleep support (requires SLP pin wiring; see RockBLOCK v3.F caution)  [oai_citation:5‡Invalid URL](data:text/plain;charset=utf-8,Invalid%20citation)
 #ifndef ENABLE_MODEM_SLEEP
-  #define ENABLE_MODEM_SLEEP 1
+  #define ENABLE_MODEM_SLEEP 0
 #endif
 
 // RockBLOCK control pins (set to actual GPIO numbers, or leave -1 to disable)
@@ -66,21 +66,21 @@
 
 // If you do not need inbound (MT) messages, leave disabled for faster/cheaper sessions.
 #ifndef ENABLE_MT_RECEIVE
-  #define ENABLE_MT_RECEIVE 0
+  #define ENABLE_MT_RECEIVE 1
 #endif
 
 // Timing
 #ifndef CFG_RETRY_DELAY_MS
-  #define CFG_RETRY_DELAY_MS 60000UL
+  #define CFG_RETRY_DELAY_MS 10000UL
 #endif
 #ifndef CFG_RETRY_DELAY_NO_NETWORK_MS
-  #define CFG_RETRY_DELAY_NO_NETWORK_MS 120000UL
+  #define CFG_RETRY_DELAY_NO_NETWORK_MS 20000UL
 #endif
 #ifndef CFG_RETRY_DELAY_TIMEOUT_MS
-  #define CFG_RETRY_DELAY_TIMEOUT_MS 60000UL
+  #define CFG_RETRY_DELAY_TIMEOUT_MS 10000UL
 #endif
 #ifndef CFG_SUCCESS_HOLD_MS
-  #define CFG_SUCCESS_HOLD_MS 8000UL
+  #define CFG_SUCCESS_HOLD_MS 10000UL
 #endif
 #ifndef CFG_WAIT_BLINK_MS
   #define CFG_WAIT_BLINK_MS 250UL
@@ -88,21 +88,21 @@
 
 // Idle loop pacing (prevents “spin hot” while doing nothing)
 #ifndef CFG_IDLE_POLL_MS
-  #define CFG_IDLE_POLL_MS 50UL
+  #define CFG_IDLE_POLL_MS 10UL
 #endif
 
-// Modem timeouts (seconds): tuned for battery use while keeping reasonable reliability.
+// Modem timeouts (seconds): tuned for reliability and quick success.
 #ifndef CFG_MODEM_AT_TIMEOUT_S
-  #define CFG_MODEM_AT_TIMEOUT_S 20
+  #define CFG_MODEM_AT_TIMEOUT_S 30
 #endif
 #ifndef CFG_MODEM_SENDRECV_TIMEOUT_S
-  #define CFG_MODEM_SENDRECV_TIMEOUT_S 240
+  #define CFG_MODEM_SENDRECV_TIMEOUT_S 300
 #endif
 #ifndef CFG_MODEM_STARTUP_TIMEOUT_S
-  #define CFG_MODEM_STARTUP_TIMEOUT_S 90
+  #define CFG_MODEM_STARTUP_TIMEOUT_S 120
 #endif
 #ifndef CFG_MODEM_SESSION_TIMEOUT_S
-  #define CFG_MODEM_SESSION_TIMEOUT_S 360
+  #define CFG_MODEM_SESSION_TIMEOUT_S 420
 #endif
 
 #endif // IRIDIUM_SATELLITE_COMM_CONFIG_H
