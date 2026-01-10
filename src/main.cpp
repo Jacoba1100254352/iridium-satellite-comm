@@ -87,7 +87,7 @@ void ISBDConsoleCallback(IridiumSBD *d, const char c) {
     idx = 0;
 
     if (line[0] != '\0') {
-#if !IF_VERBOSE
+#if IF_COMPACT
       if (strncmp(line, "+SBDIX:", 7) == 0) {
         SerialMon.print("<< ");
         SerialMon.println(line);
