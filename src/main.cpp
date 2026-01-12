@@ -151,10 +151,12 @@ void ISBDDiagsCallback(IridiumSBD *d, char c) {
 static void pixelShowColor(uint32_t c);
 static void pixelSetMode(PixelMode mode);
 static void updateWaitingBlink();
-static bool sendTextWithIndicators(const char *text);
+static bool sendTextWithIndicators(const char *text, bool urgent);
 
 static void lowPowerDelayMs(uint32_t ms);
 static void waitWithSignalLogs(unsigned long totalMs);
+static bool netAvailHigh();
+static bool waitForNetAvailAndMinCSQ(unsigned long maxWaitMs, int minCSQ);
 static void pixelPowerOn();
 static void pixelPowerOff();
 static void applyModemSettings();
@@ -180,7 +182,7 @@ static void lowPowerDelayMs(uint32_t ms) {
 }
 
 static void waitWithSignalLogs(const unsigned long totalMs) {
-  static constexpr unsigned long kSignalSampleMs = 2000UL;
+  static constexpr unsigned long kSignalSampleMs = CFG_NA_SAMPLE_MS;
   const unsigned long start = millis();
   const unsigned long end = start + totalMs;
   unsigned long nextSampleAt = start;
@@ -190,6 +192,10 @@ static void waitWithSignalLogs(const unsigned long totalMs) {
     updateWaitingBlink();
     if (now >= nextSampleAt) {
 #if !IF_QUIET
+      if (PIN_ISBD_NA >= 0) {
+        SerialMon.print("NA: ");
+        SerialMon.println(netAvailHigh() ? "1" : "0");
+      }
       if (!modem.isAsleep()) {
         int csq = -1;
         const int err = modem.getSignalQuality(csq);
@@ -214,6 +220,55 @@ static void waitWithSignalLogs(const unsigned long totalMs) {
     if (nextSampleAt < nextEvent) nextEvent = nextSampleAt;
     if (nextEvent > now) lowPowerDelayMs(nextEvent - now);
   }
+}
+
+static bool netAvailHigh() {
+#if (PIN_ISBD_NA >= 0)
+  return digitalRead(PIN_ISBD_NA) == HIGH;
+#else
+  return true;
+#endif
+}
+
+static bool waitForNetAvailAndMinCSQ(const unsigned long maxWaitMs, const int minCSQ) {
+  const unsigned long start = millis();
+  unsigned long nextSampleAt = start;
+
+  while (millis() - start < maxWaitMs) {
+    updateWaitingBlink();
+
+    const bool na = netAvailHigh();
+    int csq = -1;
+    int csqErr = ISBD_PROTOCOL_ERROR;
+
+    if (na && !modem.isAsleep()) {
+      csqErr = modem.getSignalQuality(csq);
+      if (csqErr == ISBD_SUCCESS && csq >= minCSQ) return true;
+    }
+
+#if !IF_QUIET
+    const unsigned long now = millis();
+    if (now >= nextSampleAt) {
+      SerialMon.print("NA: ");
+      SerialMon.print(na ? "1" : "0");
+      SerialMon.print("  CSQ: ");
+      if (!na) {
+        SerialMon.println("(skip; NA=0)");
+      } else if (csqErr == ISBD_SUCCESS) {
+        SerialMon.print(csq);
+        SerialMon.println("/5");
+      } else {
+        SerialMon.print("read failed err=");
+        SerialMon.println(csqErr);
+      }
+      nextSampleAt += CFG_NA_SAMPLE_MS;
+    }
+#endif
+
+    lowPowerDelayMs(50);
+  }
+
+  return false;
 }
 
 // ---------- NeoPixel power gating ----------
@@ -302,8 +357,16 @@ static bool ensureModemAwake() {
   // No sleep pin wired; can't do real sleep/wake cycling.
 #endif
 
+  if (!modem.isAsleep()) {
+    applyModemSettings();
+#if (PIN_ISBD_RI >= 0)
+    modem.enableRingAlerts(true);
+#endif
+    return true;
+  }
+
   const int err = modem.begin();
-  if (err == ISBD_SUCCESS || err == ISBD_ALREADY_AWAKE) {
+  if (err == ISBD_SUCCESS) {
     applyModemSettings();
 #if (PIN_ISBD_RI >= 0)
     modem.enableRingAlerts(true);
@@ -327,7 +390,7 @@ static void sleepModemBestEffort() {
 }
 
 // Build small MO payload: [len8][ASCII bytes...], perform send, and drive NeoPixel states.
-static bool sendTextWithIndicators(const char *text) {
+static bool sendTextWithIndicators(const char *text, const bool urgent) {
 #if !IF_QUIET
   SerialMon.print("Sending \""); SerialMon.print(text); SerialMon.println("\"...");
 #endif
@@ -337,6 +400,22 @@ static bool sendTextWithIndicators(const char *text) {
     lastSendErr = ISBD_PROTOCOL_ERROR;
     return false;
   }
+
+#if (PIN_ISBD_NA >= 0)
+  const unsigned long waitBudget = urgent ? CFG_NA_WAIT_URGENT_MS : CFG_NA_WAIT_MAX_MS;
+  if (!urgent) {
+    if (!waitForNetAvailAndMinCSQ(waitBudget, CFG_MIN_CSQ_TO_SEND)) {
+#if !IF_QUIET
+      SerialMon.println("NA/CSQ not good yet; skipping SBD session this round.");
+#endif
+      lastSendErr = ISBD_NO_NETWORK;
+      sleepModemBestEffort();
+      return false;
+    }
+  } else {
+    (void)waitForNetAvailAndMinCSQ(waitBudget, CFG_MIN_CSQ_TO_SEND);
+  }
+#endif
 
   size_t len = strlen(text);
   if (len > 110) len = 110;
@@ -447,6 +526,7 @@ static bool edgePressed(const bool current, bool &last) {
 static unsigned long computeRetryDelayMs(const int err, const int moStatus, const bool sawSBDIX) {
   // Fast-ish retry for transient errors; slower for "no network service".
   if (sawSBDIX && moStatus == 32) return CFG_RETRY_DELAY_NO_NETWORK_MS;
+  if (err == ISBD_NO_NETWORK) return CFG_RETRY_DELAY_NO_NETWORK_MS;
   if (err == ISBD_SENDRECEIVE_TIMEOUT) return CFG_RETRY_DELAY_TIMEOUT_MS;
   return kRetryDelayMs;
 }
@@ -477,6 +557,10 @@ void setup() {
 #if (PIN_ISBD_SLEEP >= 0)
   pinMode(PIN_ISBD_SLEEP, OUTPUT);
   digitalWrite(PIN_ISBD_SLEEP, LOW);
+#endif
+
+#if (PIN_ISBD_NA >= 0)
+  pinMode(PIN_ISBD_NA, INPUT);
 #endif
 
 #if !IF_QUIET
@@ -514,7 +598,7 @@ void loop() {
       SerialMon.println("ALERT button pressed.");
 #endif
       sendStartMs = millis();
-      while (!sendTextWithIndicators("ALERT")) {
+      while (!sendTextWithIndicators("ALERT", false)) {
         // If we got here, send failed. Compute adaptive delay (often longer for no-network).
         const unsigned long delayMs = computeRetryDelayMs(lastSendErr, gMOStatus, gSBDIXSeen);
 #if !IF_QUIET
@@ -531,7 +615,7 @@ void loop() {
       SerialMon.println("SOS button pressed.");
 #endif
       sendStartMs = millis();
-      while (!sendTextWithIndicators("SOS")) {
+      while (!sendTextWithIndicators("SOS", true)) {
         const unsigned long delayMs = computeRetryDelayMs(lastSendErr, gMOStatus, gSBDIXSeen);
 #if !IF_QUIET
         SerialMon.println("Retrying after delay...\n\n");
