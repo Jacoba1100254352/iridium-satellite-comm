@@ -159,6 +159,7 @@ static void lowPowerDelayMs(uint32_t ms);
 static void waitWithSignalLogs(unsigned long totalMs);
 static bool netAvailHigh();
 static bool waitForNetAvailAndMinCSQ(unsigned long maxWaitMs, int minCSQ, int stableSamples);
+static bool waitWithSignalLogsUntilReady(unsigned long totalMs, int minCsq, int stableSamples);
 static void pixelPowerOn();
 static void pixelPowerOff();
 static void applyModemSettings();
@@ -279,6 +280,67 @@ static bool waitForNetAvailAndMinCSQ(const unsigned long maxWaitMs, const int mi
 
     if (goodCount >= stableSamples) return true;
     nextSampleAt += CFG_NA_SAMPLE_MS;
+  }
+
+  return false;
+}
+
+static bool waitWithSignalLogsUntilReady(const unsigned long totalMs, const int minCsq, int stableSamples) {
+  static constexpr unsigned long kSignalSampleMs = CFG_NA_SAMPLE_MS;
+  const unsigned long start = millis();
+  const unsigned long end = start + totalMs;
+  unsigned long nextSampleAt = start;
+  int goodCount = 0;
+  if (stableSamples < 1) stableSamples = 1;
+
+  while (true) {
+    const unsigned long now = millis();
+    if (now >= end) break;
+    updateWaitingBlink();
+
+    if (now >= nextSampleAt) {
+      const bool na = netAvailHigh();
+      int csq = -1;
+      int csqErr = ISBD_PROTOCOL_ERROR;
+
+      if (na && !modem.isAsleep()) {
+        csqErr = modem.getSignalQuality(csq);
+        if (csqErr == ISBD_SUCCESS && csq >= minCsq) {
+          goodCount++;
+        } else {
+          goodCount = 0;
+        }
+      } else {
+        goodCount = 0;
+      }
+
+#if !IF_QUIET
+      SerialMon.print("NA: ");
+      SerialMon.print(na ? "1" : "0");
+      SerialMon.print("  CSQ: ");
+      if (!na) {
+        SerialMon.println("(skip; NA=0)");
+      } else if (csqErr == ISBD_SUCCESS) {
+        SerialMon.print(csq);
+        SerialMon.println("/5");
+      } else {
+        SerialMon.print("read failed err=");
+        SerialMon.println(csqErr);
+      }
+#endif
+
+      if (goodCount >= stableSamples) return true;
+      nextSampleAt += kSignalSampleMs;
+      continue;
+    }
+
+    unsigned long nextEvent = end;
+    if (pixelMode == MODE_WAITING) {
+      const unsigned long nextBlinkAt = lastBlinkToggle + kWaitBlinkMs;
+      if (nextBlinkAt < nextEvent) nextEvent = nextBlinkAt;
+    }
+    if (nextSampleAt < nextEvent) nextEvent = nextSampleAt;
+    if (nextEvent > now) lowPowerDelayMs(nextEvent - now);
   }
 
   return false;
@@ -624,7 +686,8 @@ void loop() {
         SerialMon.println("Retrying after delay...\n\n");
 #endif
         pixelSetMode(MODE_WAITING);
-        waitWithSignalLogs(delayMs);
+        const bool ready = waitWithSignalLogsUntilReady(delayMs, CFG_MIN_CSQ_TO_SEND, CFG_MIN_CSQ_STABLE_SAMPLES);
+        if (ready) continue;
       }
     }
 
@@ -643,7 +706,8 @@ void loop() {
         SerialMon.println("Retrying after delay...\n\n");
 #endif
         pixelSetMode(MODE_WAITING);
-        waitWithSignalLogs(delayMs);
+        const bool ready = waitWithSignalLogsUntilReady(delayMs, CFG_MIN_CSQ_TO_SEND, CFG_MIN_CSQ_STABLE_SAMPLES);
+        if (ready) continue;
       }
     }
     lastBounceMs = now;
