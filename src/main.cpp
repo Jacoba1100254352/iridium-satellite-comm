@@ -49,6 +49,8 @@ static unsigned long lastBlinkToggle = 0;
 static unsigned long successUntil = 0;
 static unsigned long sendStartMs = 0;
 static int lastSendErr = ISBD_SUCCESS;
+static int lastMoStatus = -1;
+static bool lastSawSBDIX = false;
 
 // SBDIX status (updated by console callback)
 // static volatile bool gLastMOSuccess = false;
@@ -233,9 +235,16 @@ static bool netAvailHigh() {
 static bool waitForNetAvailAndMinCSQ(const unsigned long maxWaitMs, const int minCSQ) {
   const unsigned long start = millis();
   unsigned long nextSampleAt = start;
+  int goodCount = 0;
 
   while (millis() - start < maxWaitMs) {
     updateWaitingBlink();
+    const unsigned long now = millis();
+
+    if (now < nextSampleAt) {
+      lowPowerDelayMs(50);
+      continue;
+    }
 
     const bool na = netAvailHigh();
     int csq = -1;
@@ -243,29 +252,32 @@ static bool waitForNetAvailAndMinCSQ(const unsigned long maxWaitMs, const int mi
 
     if (na && !modem.isAsleep()) {
       csqErr = modem.getSignalQuality(csq);
-      if (csqErr == ISBD_SUCCESS && csq >= minCSQ) return true;
+      if (csqErr == ISBD_SUCCESS && csq >= minCSQ) {
+        goodCount++;
+      } else {
+        goodCount = 0;
+      }
+    } else {
+      goodCount = 0;
     }
 
 #if !IF_QUIET
-    const unsigned long now = millis();
-    if (now >= nextSampleAt) {
-      SerialMon.print("NA: ");
-      SerialMon.print(na ? "1" : "0");
-      SerialMon.print("  CSQ: ");
-      if (!na) {
-        SerialMon.println("(skip; NA=0)");
-      } else if (csqErr == ISBD_SUCCESS) {
-        SerialMon.print(csq);
-        SerialMon.println("/5");
-      } else {
-        SerialMon.print("read failed err=");
-        SerialMon.println(csqErr);
-      }
-      nextSampleAt += CFG_NA_SAMPLE_MS;
+    SerialMon.print("NA: ");
+    SerialMon.print(na ? "1" : "0");
+    SerialMon.print("  CSQ: ");
+    if (!na) {
+      SerialMon.println("(skip; NA=0)");
+    } else if (csqErr == ISBD_SUCCESS) {
+      SerialMon.print(csq);
+      SerialMon.println("/5");
+    } else {
+      SerialMon.print("read failed err=");
+      SerialMon.println(csqErr);
     }
 #endif
 
-    lowPowerDelayMs(50);
+    if (goodCount >= CFG_MIN_CSQ_STABLE_SAMPLES) return true;
+    nextSampleAt += CFG_NA_SAMPLE_MS;
   }
 
   return false;
@@ -403,17 +415,13 @@ static bool sendTextWithIndicators(const char *text, const bool urgent) {
 
 #if (PIN_ISBD_NA >= 0)
   const unsigned long waitBudget = urgent ? CFG_NA_WAIT_URGENT_MS : CFG_NA_WAIT_MAX_MS;
-  if (!urgent) {
-    if (!waitForNetAvailAndMinCSQ(waitBudget, CFG_MIN_CSQ_TO_SEND)) {
+  if (!waitForNetAvailAndMinCSQ(waitBudget, CFG_MIN_CSQ_TO_SEND)) {
 #if !IF_QUIET
-      SerialMon.println("NA/CSQ not good yet; skipping SBD session this round.");
+    SerialMon.println("NA/CSQ not good yet; skipping SBD session this round.");
 #endif
-      lastSendErr = ISBD_NO_NETWORK;
-      sleepModemBestEffort();
-      return false;
-    }
-  } else {
-    (void)waitForNetAvailAndMinCSQ(waitBudget, CFG_MIN_CSQ_TO_SEND);
+    lastSendErr = ISBD_NO_NETWORK;
+    sleepModemBestEffort();
+    return false;
   }
 #endif
 
@@ -451,6 +459,8 @@ static bool sendTextWithIndicators(const char *text, const bool urgent) {
   const int  moStatus = gMOStatus;
   gSBDIXSeen = false;
   lastSendErr = err;
+  lastMoStatus = moStatus;
+  lastSawSBDIX = sawSBDIX;
 
   const bool moReportedSuccess = sawSBDIX && (moStatus == 0 || moStatus == 1);
   const bool timedOutButSent   = (err == ISBD_SENDRECEIVE_TIMEOUT && moReportedSuccess);
@@ -600,7 +610,7 @@ void loop() {
       sendStartMs = millis();
       while (!sendTextWithIndicators("ALERT", false)) {
         // If we got here, send failed. Compute adaptive delay (often longer for no-network).
-        const unsigned long delayMs = computeRetryDelayMs(lastSendErr, gMOStatus, gSBDIXSeen);
+        const unsigned long delayMs = computeRetryDelayMs(lastSendErr, lastMoStatus, lastSawSBDIX);
 #if !IF_QUIET
         SerialMon.println("Retrying after delay...\n\n");
 #endif
@@ -616,7 +626,7 @@ void loop() {
 #endif
       sendStartMs = millis();
       while (!sendTextWithIndicators("SOS", true)) {
-        const unsigned long delayMs = computeRetryDelayMs(lastSendErr, gMOStatus, gSBDIXSeen);
+        const unsigned long delayMs = computeRetryDelayMs(lastSendErr, lastMoStatus, lastSawSBDIX);
 #if !IF_QUIET
         SerialMon.println("Retrying after delay...\n\n");
 #endif

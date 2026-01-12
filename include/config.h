@@ -10,7 +10,7 @@
 // 1 = COMPACT
 // 2 = VERBOSE
 #ifndef LOG_LEVEL
-  #define LOG_LEVEL 1
+  #define LOG_LEVEL 2
 #endif
 
 // Backwards-compat knobs (optional)
@@ -64,9 +64,15 @@
   #define PIN_ISBD_RI -1
 #endif
 
+// RockBLOCK Network Available (NA / NetAv) pin (wire to KB2040 D4).
+// Set to -1 to disable NA gating.
+#ifndef PIN_ISBD_NA
+  #define PIN_ISBD_NA 4
+#endif
+
 // If you do not need inbound (MT) messages, leave disabled for faster/cheaper sessions.
 #ifndef ENABLE_MT_RECEIVE
-  #define ENABLE_MT_RECEIVE 1
+  #define ENABLE_MT_RECEIVE 0
 #endif
 
 // Timing
@@ -74,10 +80,28 @@
   #define CFG_RETRY_DELAY_MS 10000UL
 #endif
 #ifndef CFG_RETRY_DELAY_NO_NETWORK_MS
-  #define CFG_RETRY_DELAY_NO_NETWORK_MS 20000UL
+  #define CFG_RETRY_DELAY_NO_NETWORK_MS 60000UL
 #endif
 #ifndef CFG_RETRY_DELAY_TIMEOUT_MS
   #define CFG_RETRY_DELAY_TIMEOUT_MS 10000UL
+#endif
+#ifndef CFG_FAILURE_GRACE_MS
+  #define CFG_FAILURE_GRACE_MS 30000UL
+#endif
+#ifndef CFG_NA_WAIT_MAX_MS
+  #define CFG_NA_WAIT_MAX_MS 130000UL
+#endif
+#ifndef CFG_NA_WAIT_URGENT_MS
+  #define CFG_NA_WAIT_URGENT_MS 60000UL
+#endif
+#ifndef CFG_MIN_CSQ_TO_SEND
+  #define CFG_MIN_CSQ_TO_SEND 2
+#endif
+#ifndef CFG_MIN_CSQ_STABLE_SAMPLES
+  #define CFG_MIN_CSQ_STABLE_SAMPLES 2
+#endif
+#ifndef CFG_NA_SAMPLE_MS
+  #define CFG_NA_SAMPLE_MS 2000UL
 #endif
 #ifndef CFG_SUCCESS_HOLD_MS
   #define CFG_SUCCESS_HOLD_MS 10000UL
