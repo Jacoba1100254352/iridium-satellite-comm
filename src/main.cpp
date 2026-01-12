@@ -153,12 +153,12 @@ void ISBDDiagsCallback(IridiumSBD *d, char c) {
 static void pixelShowColor(uint32_t c);
 static void pixelSetMode(PixelMode mode);
 static void updateWaitingBlink();
-static bool sendTextWithIndicators(const char *text, bool urgent);
+static bool sendTextWithIndicators(const char *text, bool urgent, bool firstAttempt);
 
 static void lowPowerDelayMs(uint32_t ms);
 static void waitWithSignalLogs(unsigned long totalMs);
 static bool netAvailHigh();
-static bool waitForNetAvailAndMinCSQ(unsigned long maxWaitMs, int minCSQ);
+static bool waitForNetAvailAndMinCSQ(unsigned long maxWaitMs, int minCSQ, int stableSamples);
 static void pixelPowerOn();
 static void pixelPowerOff();
 static void applyModemSettings();
@@ -232,10 +232,11 @@ static bool netAvailHigh() {
 #endif
 }
 
-static bool waitForNetAvailAndMinCSQ(const unsigned long maxWaitMs, const int minCSQ) {
+static bool waitForNetAvailAndMinCSQ(const unsigned long maxWaitMs, const int minCSQ, int stableSamples) {
   const unsigned long start = millis();
   unsigned long nextSampleAt = start;
   int goodCount = 0;
+  if (stableSamples < 1) stableSamples = 1;
 
   while (millis() - start < maxWaitMs) {
     updateWaitingBlink();
@@ -276,7 +277,7 @@ static bool waitForNetAvailAndMinCSQ(const unsigned long maxWaitMs, const int mi
     }
 #endif
 
-    if (goodCount >= CFG_MIN_CSQ_STABLE_SAMPLES) return true;
+    if (goodCount >= stableSamples) return true;
     nextSampleAt += CFG_NA_SAMPLE_MS;
   }
 
@@ -402,7 +403,7 @@ static void sleepModemBestEffort() {
 }
 
 // Build small MO payload: [len8][ASCII bytes...], perform send, and drive NeoPixel states.
-static bool sendTextWithIndicators(const char *text, const bool urgent) {
+static bool sendTextWithIndicators(const char *text, const bool urgent, const bool firstAttempt) {
 #if !IF_QUIET
   SerialMon.print("Sending \""); SerialMon.print(text); SerialMon.println("\"...");
 #endif
@@ -414,8 +415,12 @@ static bool sendTextWithIndicators(const char *text, const bool urgent) {
   }
 
 #if (PIN_ISBD_NA >= 0)
-  const unsigned long waitBudget = urgent ? CFG_NA_WAIT_URGENT_MS : CFG_NA_WAIT_MAX_MS;
-  if (!waitForNetAvailAndMinCSQ(waitBudget, CFG_MIN_CSQ_TO_SEND)) {
+  const unsigned long waitBudget = firstAttempt
+    ? CFG_FIRST_ATTEMPT_WAIT_MS
+    : (urgent ? CFG_NA_WAIT_URGENT_MS : CFG_NA_WAIT_MAX_MS);
+  const int minCsq = firstAttempt ? CFG_FIRST_ATTEMPT_MIN_CSQ : CFG_MIN_CSQ_TO_SEND;
+  const int stableSamples = firstAttempt ? CFG_FIRST_ATTEMPT_STABLE_SAMPLES : CFG_MIN_CSQ_STABLE_SAMPLES;
+  if (!waitForNetAvailAndMinCSQ(waitBudget, minCsq, stableSamples)) {
 #if !IF_QUIET
     SerialMon.println("NA/CSQ not good yet; skipping SBD session this round.");
 #endif
@@ -608,7 +613,11 @@ void loop() {
       SerialMon.println("ALERT button pressed.");
 #endif
       sendStartMs = millis();
-      while (!sendTextWithIndicators("ALERT", false)) {
+      bool firstAttempt = true;
+      while (true) {
+        const bool ok = sendTextWithIndicators("ALERT", false, firstAttempt);
+        firstAttempt = false;
+        if (ok) break;
         // If we got here, send failed. Compute adaptive delay (often longer for no-network).
         const unsigned long delayMs = computeRetryDelayMs(lastSendErr, lastMoStatus, lastSawSBDIX);
 #if !IF_QUIET
@@ -625,7 +634,11 @@ void loop() {
       SerialMon.println("SOS button pressed.");
 #endif
       sendStartMs = millis();
-      while (!sendTextWithIndicators("SOS", true)) {
+      bool firstAttempt = true;
+      while (true) {
+        const bool ok = sendTextWithIndicators("SOS", true, firstAttempt);
+        firstAttempt = false;
+        if (ok) break;
         const unsigned long delayMs = computeRetryDelayMs(lastSendErr, lastMoStatus, lastSawSBDIX);
 #if !IF_QUIET
         SerialMon.println("Retrying after delay...\n\n");
