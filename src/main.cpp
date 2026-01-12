@@ -47,6 +47,7 @@ static PixelMode pixelMode = MODE_IDLE;
 static bool waitBlinkOn = false;
 static unsigned long lastBlinkToggle = 0;
 static unsigned long successUntil = 0;
+static unsigned long sendStartMs = 0;
 
 // SBDIX status (updated by console callback)
 // static volatile bool gLastMOSuccess = false;
@@ -151,6 +152,7 @@ static void pixelSetMode(PixelMode mode);
 static bool sendTextWithIndicators(const char *text);
 
 static void lowPowerDelayMs(uint32_t ms);
+static void waitWithSignalLogs(unsigned long totalMs);
 static void pixelPowerOn();
 static void pixelPowerOff();
 static void applyModemSettings();
@@ -173,6 +175,27 @@ static void lowPowerDelayMs(uint32_t ms) {
     ms -= chunk;
   }
 #endif
+}
+
+static void waitWithSignalLogs(const unsigned long totalMs) {
+  static constexpr unsigned long kSignalSampleMs = 2000UL;
+  const unsigned long start = millis();
+  while (millis() - start < totalMs) {
+#if !IF_QUIET
+    int csq = -1;
+    const int err = modem.getSignalQuality(csq);
+    if (err == ISBD_SUCCESS) {
+      SerialMon.print("CSQ: ");
+      SerialMon.print(csq);
+      SerialMon.println("/5");
+    }
+#endif
+    const unsigned long elapsed = millis() - start;
+    const unsigned long remaining = (elapsed < totalMs) ? (totalMs - elapsed) : 0;
+    if (remaining == 0) break;
+    const unsigned long chunk = (remaining > kSignalSampleMs) ? kSignalSampleMs : remaining;
+    lowPowerDelayMs(chunk);
+  }
 }
 
 // ---------- NeoPixel power gating ----------
@@ -367,6 +390,18 @@ static bool sendTextWithIndicators(const char *text) {
   pixelSetMode(MODE_SUCCESS);
   successUntil = millis() + kSuccessHoldMs;
 
+#if !IF_QUIET
+  if (sendStartMs != 0) {
+    const unsigned long elapsedMs = millis() - sendStartMs;
+    SerialMon.print("Elapsed since button press: ");
+    SerialMon.print(elapsedMs / 1000);
+    SerialMon.print("s ");
+    SerialMon.print(elapsedMs % 1000);
+    SerialMon.println("ms");
+    sendStartMs = 0;
+  }
+#endif
+
   // Immediately sleep the modem after a successful send.
   sleepModemBestEffort();
   return true;
@@ -448,16 +483,15 @@ void loop() {
 #if !IF_QUIET
       SerialMon.println("ALERT button pressed.");
 #endif
-      while (true) {
-        if (const bool ok = sendTextWithIndicators("ALERT"); ok) break;
-
+      sendStartMs = millis();
+      while (!sendTextWithIndicators("ALERT")) {
         // If we got here, send failed. Compute adaptive delay (often longer for no-network).
         const unsigned long delayMs = computeRetryDelayMs(ISBD_PROTOCOL_ERROR, gMOStatus, gSBDIXSeen);
 #if !IF_QUIET
         SerialMon.println("Retrying after delay...\n\n");
 #endif
         pixelSetMode(MODE_FAIL);
-        lowPowerDelayMs(delayMs);
+        waitWithSignalLogs(delayMs);
       }
     }
 
@@ -465,15 +499,14 @@ void loop() {
 #if !IF_QUIET
       SerialMon.println("SOS button pressed.");
 #endif
-      while (true) {
-        if (const bool ok = sendTextWithIndicators("SOS"); ok) break;
-
+      sendStartMs = millis();
+      while (!sendTextWithIndicators("SOS")) {
         const unsigned long delayMs = computeRetryDelayMs(ISBD_PROTOCOL_ERROR, gMOStatus, gSBDIXSeen);
 #if !IF_QUIET
         SerialMon.println("Retrying after delay...\n\n");
 #endif
         pixelSetMode(MODE_FAIL);
-        lowPowerDelayMs(delayMs);
+        waitWithSignalLogs(delayMs);
       }
     }
     lastBounceMs = now;
