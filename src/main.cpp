@@ -48,6 +48,7 @@ static bool waitBlinkOn = false;
 static unsigned long lastBlinkToggle = 0;
 static unsigned long successUntil = 0;
 static unsigned long sendStartMs = 0;
+static int lastSendErr = ISBD_SUCCESS;
 
 // SBDIX status (updated by console callback)
 // static volatile bool gLastMOSuccess = false;
@@ -149,6 +150,7 @@ void ISBDDiagsCallback(IridiumSBD *d, char c) {
 // Forward decls
 static void pixelShowColor(uint32_t c);
 static void pixelSetMode(PixelMode mode);
+static void updateWaitingBlink();
 static bool sendTextWithIndicators(const char *text);
 
 static void lowPowerDelayMs(uint32_t ms);
@@ -180,21 +182,37 @@ static void lowPowerDelayMs(uint32_t ms) {
 static void waitWithSignalLogs(const unsigned long totalMs) {
   static constexpr unsigned long kSignalSampleMs = 2000UL;
   const unsigned long start = millis();
-  while (millis() - start < totalMs) {
+  const unsigned long end = start + totalMs;
+  unsigned long nextSampleAt = start;
+  while (true) {
+    const unsigned long now = millis();
+    if (now >= end) break;
+    updateWaitingBlink();
+    if (now >= nextSampleAt) {
 #if !IF_QUIET
-    int csq = -1;
-    const int err = modem.getSignalQuality(csq);
-    if (err == ISBD_SUCCESS) {
-      SerialMon.print("CSQ: ");
-      SerialMon.print(csq);
-      SerialMon.println("/5");
-    }
+      if (!modem.isAsleep()) {
+        int csq = -1;
+        const int err = modem.getSignalQuality(csq);
+        if (err == ISBD_SUCCESS) {
+          SerialMon.print("CSQ: ");
+          SerialMon.print(csq);
+          SerialMon.println("/5");
+        } else {
+          SerialMon.print("CSQ read failed, err=");
+          SerialMon.println(err);
+        }
+      }
 #endif
-    const unsigned long elapsed = millis() - start;
-    const unsigned long remaining = (elapsed < totalMs) ? (totalMs - elapsed) : 0;
-    if (remaining == 0) break;
-    const unsigned long chunk = (remaining > kSignalSampleMs) ? kSignalSampleMs : remaining;
-    lowPowerDelayMs(chunk);
+      nextSampleAt += kSignalSampleMs;
+      continue;
+    }
+    unsigned long nextEvent = end;
+    if (pixelMode == MODE_WAITING) {
+      const unsigned long nextBlinkAt = lastBlinkToggle + kWaitBlinkMs;
+      if (nextBlinkAt < nextEvent) nextEvent = nextBlinkAt;
+    }
+    if (nextSampleAt < nextEvent) nextEvent = nextSampleAt;
+    if (nextEvent > now) lowPowerDelayMs(nextEvent - now);
   }
 }
 
@@ -235,9 +253,9 @@ static void pixelSetMode(const PixelMode mode) {
       pixelPowerOff();
       break;
     case MODE_WAITING:
-      waitBlinkOn = false;
+      waitBlinkOn = true;
       lastBlinkToggle = millis();
-      pixelShowColor(C_OFF());
+      pixelShowColor(C_YELLOW());
       break;
     case MODE_FAIL:
       pixelShowColor(C_RED());
@@ -251,14 +269,17 @@ static void pixelSetMode(const PixelMode mode) {
 // Library callback (called repeatedly during modem work)
 // Blink yellow while waiting.
 bool ISBDCallback() {
-  if (pixelMode == MODE_WAITING) {
-    if (const unsigned long now = millis(); now - lastBlinkToggle >= kWaitBlinkMs) {
-      waitBlinkOn = !waitBlinkOn;
-      pixelShowColor(waitBlinkOn ? C_YELLOW() : C_OFF());
-      lastBlinkToggle = now;
-    }
-  }
+  updateWaitingBlink();
   return true; // never cancel
+}
+
+static void updateWaitingBlink() {
+  if (pixelMode != MODE_WAITING) return;
+  if (const unsigned long now = millis(); now - lastBlinkToggle >= kWaitBlinkMs) {
+    waitBlinkOn = !waitBlinkOn;
+    pixelShowColor(waitBlinkOn ? C_YELLOW() : C_OFF());
+    lastBlinkToggle = now;
+  }
 }
 
 static void waitForSerialIfEnabled() {
@@ -307,8 +328,13 @@ static void sleepModemBestEffort() {
 
 // Build small MO payload: [len8][ASCII bytes...], perform send, and drive NeoPixel states.
 static bool sendTextWithIndicators(const char *text) {
+#if !IF_QUIET
+  SerialMon.print("Sending \""); SerialMon.print(text); SerialMon.println("\"...");
+#endif
+  pixelSetMode(MODE_WAITING);
+
   if (!ensureModemAwake()) {
-    pixelSetMode(MODE_FAIL);
+    lastSendErr = ISBD_PROTOCOL_ERROR;
     return false;
   }
 
@@ -322,11 +348,6 @@ static bool sendTextWithIndicators(const char *text) {
   gSBDIXSeen = false;
   gMOStatus = gMOMSN = gMTStatus = gMTMSN = gMTLen = gMTQueued = -1;
 
-#if !IF_QUIET
-  SerialMon.print("Sending \""); SerialMon.print(text); SerialMon.println("\"...");
-#endif
-  pixelSetMode(MODE_WAITING);
-
   int err = ISBD_PROTOCOL_ERROR;
 
 #if (ENABLE_MT_RECEIVE == 1)
@@ -337,10 +358,20 @@ static bool sendTextWithIndicators(const char *text) {
   // Send-only is usually faster/cheaper (no MT retrieval) when you don't need inbound messages.
   err = modem.sendSBDBinary(mo, 1 + len);
 #endif
+  if (err == ISBD_IS_ASLEEP) {
+    if (ensureModemAwake()) {
+#if (ENABLE_MT_RECEIVE == 1)
+      err = modem.sendReceiveSBDBinary(mo, 1 + len, mt, mtLen);
+#else
+      err = modem.sendSBDBinary(mo, 1 + len);
+#endif
+    }
+  }
 
   const bool sawSBDIX = gSBDIXSeen;
   const int  moStatus = gMOStatus;
   gSBDIXSeen = false;
+  lastSendErr = err;
 
   const bool moReportedSuccess = sawSBDIX && (moStatus == 0 || moStatus == 1);
   const bool timedOutButSent   = (err == ISBD_SENDRECEIVE_TIMEOUT && moReportedSuccess);
@@ -374,7 +405,6 @@ static bool sendTextWithIndicators(const char *text) {
     }
 #endif
 
-    pixelSetMode(MODE_FAIL);
     sleepModemBestEffort();
     return false;
   }
@@ -486,11 +516,12 @@ void loop() {
       sendStartMs = millis();
       while (!sendTextWithIndicators("ALERT")) {
         // If we got here, send failed. Compute adaptive delay (often longer for no-network).
-        const unsigned long delayMs = computeRetryDelayMs(ISBD_PROTOCOL_ERROR, gMOStatus, gSBDIXSeen);
+        const unsigned long delayMs = computeRetryDelayMs(lastSendErr, gMOStatus, gSBDIXSeen);
 #if !IF_QUIET
         SerialMon.println("Retrying after delay...\n\n");
 #endif
-        pixelSetMode(MODE_FAIL);
+        const bool showFail = (sendStartMs != 0) && ((millis() - sendStartMs) >= CFG_FAILURE_GRACE_MS);
+        pixelSetMode(showFail ? MODE_FAIL : MODE_WAITING);
         waitWithSignalLogs(delayMs);
       }
     }
@@ -501,11 +532,12 @@ void loop() {
 #endif
       sendStartMs = millis();
       while (!sendTextWithIndicators("SOS")) {
-        const unsigned long delayMs = computeRetryDelayMs(ISBD_PROTOCOL_ERROR, gMOStatus, gSBDIXSeen);
+        const unsigned long delayMs = computeRetryDelayMs(lastSendErr, gMOStatus, gSBDIXSeen);
 #if !IF_QUIET
         SerialMon.println("Retrying after delay...\n\n");
 #endif
-        pixelSetMode(MODE_FAIL);
+        const bool showFail = (sendStartMs != 0) && ((millis() - sendStartMs) >= CFG_FAILURE_GRACE_MS);
+        pixelSetMode(showFail ? MODE_FAIL : MODE_WAITING);
         waitWithSignalLogs(delayMs);
       }
     }
