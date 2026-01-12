@@ -623,8 +623,7 @@ void loop() {
 #if !IF_QUIET
         SerialMon.println("Retrying after delay...\n\n");
 #endif
-        const bool showFail = (sendStartMs != 0) && ((millis() - sendStartMs) >= CFG_FAILURE_GRACE_MS);
-        pixelSetMode(showFail ? MODE_FAIL : MODE_WAITING);
+        pixelSetMode(MODE_WAITING);
         waitWithSignalLogs(delayMs);
       }
     }
@@ -643,8 +642,7 @@ void loop() {
 #if !IF_QUIET
         SerialMon.println("Retrying after delay...\n\n");
 #endif
-        const bool showFail = (sendStartMs != 0) && ((millis() - sendStartMs) >= CFG_FAILURE_GRACE_MS);
-        pixelSetMode(showFail ? MODE_FAIL : MODE_WAITING);
+        pixelSetMode(MODE_WAITING);
         waitWithSignalLogs(delayMs);
       }
     }
