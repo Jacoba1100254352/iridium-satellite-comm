@@ -421,6 +421,7 @@ static void waitForSerialIfEnabled() {
 // ---------- Modem helpers ----------
 static void applyModemSettings() {
   modem.setPowerProfile(IridiumSBD::DEFAULT_POWER_PROFILE);
+  modem.useMSSTMWorkaround(CFG_ENABLE_MSSTM_WORKAROUND == 1);
   modem.adjustATTimeout(CFG_MODEM_AT_TIMEOUT_S);
   modem.adjustSendReceiveTimeout(CFG_MODEM_SENDRECV_TIMEOUT_S);
   modem.adjustStartupTimeout(CFG_MODEM_STARTUP_TIMEOUT_S);
