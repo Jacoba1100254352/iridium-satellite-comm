@@ -43,6 +43,16 @@ static uint32_t C_OFF()    { return Adafruit_NeoPixel::Color(0,   0,   0  ); }
 // State / Types
 // =========================
 enum PixelMode : uint8_t { MODE_IDLE, MODE_WAITING, MODE_FAIL, MODE_SUCCESS };
+enum class DeviceState : uint8_t { IDLE, SEND_ATTEMPT, RETRY_WAIT, SUCCESS_HOLD, CANCELLED };
+
+struct SendContext {
+  const char *text = nullptr;
+  bool urgent = false;
+  bool firstAttempt = true;
+};
+
+static DeviceState deviceState = DeviceState::IDLE;
+static SendContext sendCtx = {};
 static PixelMode pixelMode = MODE_IDLE;
 static bool waitBlinkOn = false;
 static unsigned long lastBlinkToggle = 0;
@@ -51,6 +61,7 @@ static unsigned long sendStartMs = 0;
 static int lastSendErr = ISBD_SUCCESS;
 static int lastMoStatus = -1;
 static bool lastSawSBDIX = false;
+static volatile bool gCancelRequested = false;
 
 // SBDIX status (updated by console callback)
 // static volatile bool gLastMOSuccess = false;
@@ -160,6 +171,9 @@ static void waitWithSignalLogs(unsigned long totalMs);
 static bool netAvailHigh();
 static bool waitForNetAvailAndMinCSQ(unsigned long maxWaitMs, int minCSQ, int stableSamples);
 static bool waitWithSignalLogsUntilReady(unsigned long totalMs, int minCsq, int stableSamples);
+static bool bothButtonsPressed();
+static bool cancelRequested();
+static void cancelCurrentOperation();
 static void pixelPowerOn();
 static void pixelPowerOff();
 static void applyModemSettings();
@@ -190,6 +204,7 @@ static void waitWithSignalLogs(const unsigned long totalMs) {
   const unsigned long end = start + totalMs;
   unsigned long nextSampleAt = start;
   while (true) {
+    if (cancelRequested()) return;
     const unsigned long now = millis();
     if (now >= end) break;
     updateWaitingBlink();
@@ -240,6 +255,7 @@ static bool waitForNetAvailAndMinCSQ(const unsigned long maxWaitMs, const int mi
   if (stableSamples < 1) stableSamples = 1;
 
   while (millis() - start < maxWaitMs) {
+    if (cancelRequested()) return false;
     updateWaitingBlink();
     const unsigned long now = millis();
 
@@ -294,6 +310,7 @@ static bool waitWithSignalLogsUntilReady(const unsigned long totalMs, const int 
   if (stableSamples < 1) stableSamples = 1;
 
   while (true) {
+    if (cancelRequested()) return false;
     const unsigned long now = millis();
     if (now >= end) break;
     updateWaitingBlink();
@@ -399,6 +416,7 @@ static void pixelSetMode(const PixelMode mode) {
 // Library callback (called repeatedly during modem work)
 // Blink yellow while waiting.
 bool ISBDCallback() {
+  if (cancelRequested()) return false;
   updateWaitingBlink();
   return true; // never cancel
 }
@@ -416,6 +434,32 @@ static void waitForSerialIfEnabled() {
   if constexpr (WAIT_FOR_USB_SERIAL_MS == 0) return;
   const unsigned long start = millis();
   while (!SerialMon && (millis() - start < WAIT_FOR_USB_SERIAL_MS)) { delay(10); }
+}
+
+static bool bothButtonsPressed() {
+  return digitalRead(BTN_ALERT) == LOW && digitalRead(BTN_SOS) == LOW;
+}
+
+static bool cancelRequested() {
+  if (deviceState != DeviceState::IDLE && bothButtonsPressed()) gCancelRequested = true;
+  return gCancelRequested;
+}
+
+static void cancelCurrentOperation() {
+  lastSendErr = ISBD_CANCELLED;
+  lastMoStatus = -1;
+  lastSawSBDIX = false;
+  pixelSetMode(MODE_IDLE);
+  successUntil = 0;
+  sendStartMs = 0;
+  sleepModemBestEffort();
+#if !IF_QUIET
+  SerialMon.println("Operation cancelled.");
+#endif
+  while (bothButtonsPressed()) {
+    lowPowerDelayMs(25);
+  }
+  gCancelRequested = false;
 }
 
 // ---------- Modem helpers ----------
@@ -471,6 +515,10 @@ static bool sendTextWithIndicators(const char *text, const bool urgent, const bo
   SerialMon.print("Sending \""); SerialMon.print(text); SerialMon.println("\"...");
 #endif
   pixelSetMode(MODE_WAITING);
+  if (cancelRequested()) {
+    lastSendErr = ISBD_CANCELLED;
+    return false;
+  }
 
   if (!ensureModemAwake()) {
     lastSendErr = ISBD_PROTOCOL_ERROR;
@@ -660,62 +708,81 @@ void setup() {
 }
 
 void loop() {
-  // End SUCCESS hold
-  if (pixelMode == MODE_SUCCESS && successUntil != 0 && millis() >= successUntil) {
-    pixelSetMode(MODE_IDLE);
-    successUntil = 0;
-  }
-
-  // Read buttons with light debounce
   const bool curAlert = digitalRead(BTN_ALERT);
   const bool curSOS   = digitalRead(BTN_SOS);
+  const bool bothPressed = (curAlert == LOW && curSOS == LOW);
 
-  if (const unsigned long now = millis(); now - lastBounceMs > 30) {
-    if (edgePressed(curAlert, lastAlert)) {
-#if !IF_QUIET
-      SerialMon.println("ALERT button pressed.");
-#endif
-      sendStartMs = millis();
-      bool firstAttempt = true;
-      while (true) {
-        const bool ok = sendTextWithIndicators("ALERT", false, firstAttempt);
-        firstAttempt = false;
-        if (ok) break;
-        // If we got here, send failed. Compute adaptive delay (often longer for no-network).
-        const unsigned long delayMs = computeRetryDelayMs(lastSendErr, lastMoStatus, lastSawSBDIX);
-#if !IF_QUIET
-        SerialMon.println("Retrying after delay...\n\n");
-#endif
-        pixelSetMode(MODE_WAITING);
-        const bool ready = waitWithSignalLogsUntilReady(delayMs, CFG_MIN_CSQ_TO_SEND, CFG_MIN_CSQ_STABLE_SAMPLES);
-        if (ready) continue;
-      }
-    }
-
-    if (edgePressed(curSOS, lastSOS)) {
-#if !IF_QUIET
-      SerialMon.println("SOS button pressed.");
-#endif
-      sendStartMs = millis();
-      bool firstAttempt = true;
-      while (true) {
-        const bool ok = sendTextWithIndicators("SOS", true, firstAttempt);
-        firstAttempt = false;
-        if (ok) break;
-        const unsigned long delayMs = computeRetryDelayMs(lastSendErr, lastMoStatus, lastSawSBDIX);
-#if !IF_QUIET
-        SerialMon.println("Retrying after delay...\n\n");
-#endif
-        pixelSetMode(MODE_WAITING);
-        const bool ready = waitWithSignalLogsUntilReady(delayMs, CFG_MIN_CSQ_TO_SEND, CFG_MIN_CSQ_STABLE_SAMPLES);
-        if (ready) continue;
-      }
-    }
-    lastBounceMs = now;
+  if (deviceState != DeviceState::IDLE && bothPressed) {
+    gCancelRequested = true;
+    deviceState = DeviceState::CANCELLED;
   }
 
-  // Idle: keep the MCU from spinning hot.
-  if (pixelMode == MODE_IDLE) {
-    lowPowerDelayMs(CFG_IDLE_POLL_MS);
+  switch (deviceState) {
+    case DeviceState::IDLE: {
+      if (const unsigned long now = millis(); now - lastBounceMs > 30) {
+        if (!bothPressed && edgePressed(curAlert, lastAlert)) {
+#if !IF_QUIET
+          SerialMon.println("ALERT button pressed.");
+#endif
+          sendStartMs = millis();
+          sendCtx = { "ALERT", false, true };
+          gCancelRequested = false;
+          deviceState = DeviceState::SEND_ATTEMPT;
+        } else if (!bothPressed && edgePressed(curSOS, lastSOS)) {
+#if !IF_QUIET
+          SerialMon.println("SOS button pressed.");
+#endif
+          sendStartMs = millis();
+          sendCtx = { "SOS", true, true };
+          gCancelRequested = false;
+          deviceState = DeviceState::SEND_ATTEMPT;
+        }
+        lastBounceMs = now;
+      }
+
+      if (deviceState == DeviceState::IDLE) {
+        lowPowerDelayMs(CFG_IDLE_POLL_MS);
+      }
+      break;
+    }
+    case DeviceState::SEND_ATTEMPT: {
+      if (cancelRequested()) {
+        deviceState = DeviceState::CANCELLED;
+        break;
+      }
+      const bool ok = sendTextWithIndicators(sendCtx.text, sendCtx.urgent, sendCtx.firstAttempt);
+      sendCtx.firstAttempt = false;
+      deviceState = ok ? DeviceState::SUCCESS_HOLD : DeviceState::RETRY_WAIT;
+      break;
+    }
+    case DeviceState::RETRY_WAIT: {
+      if (cancelRequested()) {
+        deviceState = DeviceState::CANCELLED;
+        break;
+      }
+      const unsigned long delayMs = computeRetryDelayMs(lastSendErr, lastMoStatus, lastSawSBDIX);
+#if !IF_QUIET
+      SerialMon.println("Retrying after delay...\n\n");
+#endif
+      pixelSetMode(MODE_WAITING);
+      (void)waitWithSignalLogsUntilReady(delayMs, CFG_MIN_CSQ_TO_SEND, CFG_MIN_CSQ_STABLE_SAMPLES);
+      deviceState = cancelRequested() ? DeviceState::CANCELLED : DeviceState::SEND_ATTEMPT;
+      break;
+    }
+    case DeviceState::SUCCESS_HOLD: {
+      if (successUntil != 0 && millis() >= successUntil) {
+        pixelSetMode(MODE_IDLE);
+        successUntil = 0;
+        deviceState = DeviceState::IDLE;
+      } else {
+        lowPowerDelayMs(CFG_IDLE_POLL_MS);
+      }
+      break;
+    }
+    case DeviceState::CANCELLED: {
+      cancelCurrentOperation();
+      deviceState = DeviceState::IDLE;
+      break;
+    }
   }
 }
