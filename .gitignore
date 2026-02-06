@@ -7,7 +7,6 @@
 
 **/.DS_Store
 
-./Imported SatelliteDevBoard.Library.PrjPcb
-./Imported SatelliteDevBoard.PrjPcb
-./Eagle Files
-./archive
+Imported*
+Eagle Files
+archive
