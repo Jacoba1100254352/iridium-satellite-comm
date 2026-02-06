@@ -14,8 +14,8 @@
 // =========================
 // Buttons (active-LOW to GND)
 // =========================
-static constexpr int BTN_ALERT = 9;   // D9 → GND sends "ALERT"
-static constexpr int BTN_SOS   = 8;   // D8 → GND sends "SOS"
+static constexpr int BTN_ALERT = PIN_BTN_ALERT;
+static constexpr int BTN_SOS   = PIN_BTN_SOS;
 
 // =========================
 // Timing (override in config.h via CFG_* macros)
@@ -522,6 +522,10 @@ static bool sendTextWithIndicators(const char *text, const bool urgent, const bo
   successUntil = millis() + kSuccessHoldMs;
 
 #if !IF_QUIET
+  SerialMon.print("Successfully Transmitted: \"");
+  SerialMon.print(text);
+  SerialMon.println("\"");
+
   if (sendStartMs != 0) {
     const unsigned long elapsedMs = millis() - sendStartMs;
     SerialMon.print("Elapsed since button press: ");
@@ -604,6 +608,8 @@ void setup() {
 }
 
 void loop() {
+  processGps();
+
   const bool curAlert = digitalRead(BTN_ALERT);
   const bool curSOS   = digitalRead(BTN_SOS);
   const bool bothPressed = (curAlert == LOW && curSOS == LOW);

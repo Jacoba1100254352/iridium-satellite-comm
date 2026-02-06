@@ -60,6 +60,14 @@
   #define PIN_ISBD_SLEEP 2
 #endif
 
+// Buttons (active-LOW to GND)
+#ifndef PIN_BTN_ALERT
+  #define PIN_BTN_ALERT 8
+#endif
+#ifndef PIN_BTN_SOS
+  #define PIN_BTN_SOS 9
+#endif
+
 // RockBLOCK Ring Indicator (RI) pin (wire to KB2040 D3).
 // Set to -1 to disable RI handling.
 #ifndef PIN_ISBD_RI
@@ -70,6 +78,23 @@
 // Set to -1 to disable NA gating.
 #ifndef PIN_ISBD_NA
   #define PIN_ISBD_NA 4
+#endif
+
+// GNSS control pins
+#ifndef PIN_GPS_PPS
+  #define PIN_GPS_PPS A0
+#endif
+#ifndef PIN_GPS_EINT
+  #define PIN_GPS_EINT 10
+#endif
+#ifndef PIN_GPS_RST
+  #define PIN_GPS_RST A1
+#endif
+#ifndef PIN_GPS_SDA
+  #define PIN_GPS_SDA A2
+#endif
+#ifndef PIN_GPS_SCL
+  #define PIN_GPS_SCL A3
 #endif
 
 // If you do not need inbound (MT) messages, leave disabled for faster/cheaper sessions.

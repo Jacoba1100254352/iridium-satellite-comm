@@ -23,8 +23,12 @@
     </configurations>
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="57e4f083-aa23-42d0-b943-7e055edcfb81" name="Changes" comment="Add GPS functionality and refactor LED handling for improved feedback">
-      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
+    <list default="true" id="57e4f083-aa23-42d0-b943-7e055edcfb81" name="Changes" comment="Update .gitignore to simplify file exclusions and improve clarity">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/include/config.h" beforeDir="false" afterPath="$PROJECT_DIR$/include/config.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/include/gps_helper.h" beforeDir="false" afterPath="$PROJECT_DIR$/include/gps_helper.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/gps_helper.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/gps_helper.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/main.cpp" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -46,6 +50,7 @@
     </projectState>
   </component>
   <component name="Git.Settings">
+    <option name="PUSH_AUTO_UPDATE" value="true" />
     <option name="RECENT_BRANCH_BY_REPOSITORY">
       <map>
         <entry key="$PROJECT_DIR$" value="6851ab4df5a742f49559d980d7fa2a24654299be" />
@@ -149,6 +154,9 @@
   }
 }]]></component>
   <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$" />
+    </key>
     <key name="MoveFile.RECENT_KEYS">
       <recent name="$PROJECT_DIR$/src" />
       <recent name="$PROJECT_DIR$" />
@@ -313,7 +321,7 @@
       <workItem from="1768769170050" duration="102000" />
       <workItem from="1768769347357" duration="664000" />
       <workItem from="1770234441758" duration="1734000" />
-      <workItem from="1770392430924" duration="5426000" />
+      <workItem from="1770392430924" duration="10134000" />
     </task>
     <task id="LOCAL-00001" summary="Updating to use platformio">
       <option name="closed" value="true" />
@@ -363,7 +371,31 @@
       <option name="project" value="LOCAL" />
       <updated>1770401840803</updated>
     </task>
-    <option name="localTasksCounter" value="7" />
+    <task id="LOCAL-00007" summary="Update .gitignore and exclude additional project files from version control">
+      <option name="closed" value="true" />
+      <created>1770402009132</created>
+      <option name="number" value="00007" />
+      <option name="presentableId" value="LOCAL-00007" />
+      <option name="project" value="LOCAL" />
+      <updated>1770402009132</updated>
+    </task>
+    <task id="LOCAL-00008" summary="Update .gitignore and exclude additional project files from version control">
+      <option name="closed" value="true" />
+      <created>1770402091455</created>
+      <option name="number" value="00008" />
+      <option name="presentableId" value="LOCAL-00008" />
+      <option name="project" value="LOCAL" />
+      <updated>1770402091455</updated>
+    </task>
+    <task id="LOCAL-00009" summary="Update .gitignore to simplify file exclusions and improve clarity">
+      <option name="closed" value="true" />
+      <created>1770402175215</created>
+      <option name="number" value="00009" />
+      <option name="presentableId" value="LOCAL-00009" />
+      <option name="project" value="LOCAL" />
+      <updated>1770402175215</updated>
+    </task>
+    <option name="localTasksCounter" value="10" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -387,7 +419,10 @@
     <MESSAGE value="Adjusting the logs and log levels. Also implementing a temporary workaround to modem.useMSSTMWorkaround(true); not causing the correct lines to be printed. Need to fix later." />
     <MESSAGE value="Add .gitignore and enhance configuration for low-power operation" />
     <MESSAGE value="Add GPS functionality and refactor LED handling for improved feedback" />
-    <option name="LAST_COMMIT_MESSAGE" value="Add GPS functionality and refactor LED handling for improved feedback" />
+    <MESSAGE value="Update .gitignore and exclude additional project files from version control" />
+    <MESSAGE value="Merge remote-tracking branch 'origin/main'&#10;&#10;# Conflicts:&#10;#&#9;.gitignore" />
+    <MESSAGE value="Update .gitignore to simplify file exclusions and improve clarity" />
+    <option name="LAST_COMMIT_MESSAGE" value="Update .gitignore to simplify file exclusions and improve clarity" />
   </component>
   <component name="XSLT-Support.FileAssociations.UIState">
     <expand />
