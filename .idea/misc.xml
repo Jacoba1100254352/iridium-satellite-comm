@@ -13,6 +13,9 @@
     </libraryRoots>
     <excludeRoots>
       <file path="$PROJECT_DIR$/.pio" />
+      <file path="$PROJECT_DIR$/Eagle Files" />
+      <file path="$PROJECT_DIR$/Imported SatelliteDevBoard.Library.PrjPcb" />
+      <file path="$PROJECT_DIR$/Imported SatelliteDevBoard.PrjPcb" />
       <file path="$PROJECT_DIR$/archive" />
     </excludeRoots>
   </component>

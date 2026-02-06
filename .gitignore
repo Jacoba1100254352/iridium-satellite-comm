@@ -6,3 +6,7 @@
 .pio
 
 **/.DS_Store
+
+./Imported*
+./Eagle Files
+./archive
