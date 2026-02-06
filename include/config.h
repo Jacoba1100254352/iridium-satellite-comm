@@ -57,9 +57,11 @@
 
 // RockBLOCK control pins (set to actual GPIO numbers, or leave -1 to disable)
 #ifndef PIN_ISBD_SLEEP
-  #define PIN_ISBD_SLEEP -1
+  #define PIN_ISBD_SLEEP 2
 #endif
 
+// RockBLOCK Ring Indicator (RI) pin (wire to KB2040 D3).
+// Set to -1 to disable RI handling.
 #ifndef PIN_ISBD_RI
   #define PIN_ISBD_RI -1
 #endif

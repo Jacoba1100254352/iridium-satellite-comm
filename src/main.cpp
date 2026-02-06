@@ -1,4 +1,3 @@
-#include <Adafruit_NeoPixel.h>
 #include <Arduino.h>
 #include <IridiumSBD.h>
 
@@ -8,6 +7,8 @@
 #endif
 
 #include "../include/config.h"
+#include "../include/gps_helper.h"
+#include "../include/led_helper.h"
 #include "../include/print_functions.h"
 
 // =========================
@@ -24,38 +25,18 @@ static constexpr unsigned long kSuccessHoldMs   = CFG_SUCCESS_HOLD_MS;
 static constexpr unsigned long kWaitBlinkMs     = CFG_WAIT_BLINK_MS;
 
 // =========================
-// NeoPixel (KB2040 onboard)
-// =========================
-#define NUMPIXELS 1
-Adafruit_NeoPixel pixels(NUMPIXELS, PIN_NEOPIXEL, NEO_GRB + NEO_KHZ800);
-
-#if defined(NEOPIXEL_POWER)
-static const int NEOPIXEL_PWR = NEOPIXEL_POWER;
-#endif
-
-// Quick color helpers
-static uint32_t C_RED()    { return Adafruit_NeoPixel::Color(255, 0,   0  ); }
-static uint32_t C_GREEN()  { return Adafruit_NeoPixel::Color(0,   255, 0  ); }
-static uint32_t C_YELLOW() { return Adafruit_NeoPixel::Color(255, 200, 0  ); }
-static uint32_t C_OFF()    { return Adafruit_NeoPixel::Color(0,   0,   0  ); }
-
-// =========================
 // State / Types
 // =========================
-enum PixelMode : uint8_t { MODE_IDLE, MODE_WAITING, MODE_FAIL, MODE_SUCCESS };
 enum class DeviceState : uint8_t { IDLE, SEND_ATTEMPT, RETRY_WAIT, SUCCESS_HOLD, CANCELLED };
 
 struct SendContext {
-  const char *text = nullptr;
-  bool urgent = false;
-  bool firstAttempt = true;
+  char text[120]; // Changed from const char* to buffer to allow appending coords
+  bool urgent;
+  bool firstAttempt;
 };
 
-static DeviceState deviceState = DeviceState::IDLE;
+static auto deviceState = DeviceState::IDLE;
 static SendContext sendCtx = {};
-static PixelMode pixelMode = MODE_IDLE;
-static bool waitBlinkOn = false;
-static unsigned long lastBlinkToggle = 0;
 static unsigned long successUntil = 0;
 static unsigned long sendStartMs = 0;
 static int lastSendErr = ISBD_SUCCESS;
@@ -82,7 +63,7 @@ static unsigned long lastBounceMs = 0;
 #if (PIN_ISBD_SLEEP >= 0) && (PIN_ISBD_RI >= 0)
 IridiumSBD modem(Serial1, PIN_ISBD_SLEEP, PIN_ISBD_RI);
 #elif (PIN_ISBD_SLEEP >= 0)
-IridiumSBD modem(Serial1, PIN_ISBD_SLEEP);
+IridiumSBD modem(Serial1, PIN_ISBD_SLEEP); // NOLINT(cppcoreguidelines-interfaces-global-init)
 #else
 IridiumSBD modem(Serial1);
 #endif
@@ -116,15 +97,36 @@ void ISBDConsoleCallback(IridiumSBD *d, const char c) {
 
       // Parse +SBDIX and emit compact/verbose status
       if (strncmp(line, "+SBDIX:", 7) == 0) {
-        int a, b, c2, d2, e, f;
-        if (sscanf(line + 7, " %d , %d , %d , %d , %d , %d", &a, &b, &c2, &d2, &e, &f) == 6) {
-          gMOStatus = a; gMOMSN = b; gMTStatus = c2; gMTMSN = d2; gMTLen = e; gMTQueued = f;
+        char *p = line + 7;
+        char *endp;
+        int vals[6];
+        bool success = true;
+        for (int & val : vals) {
+          val = static_cast<int>(strtol(p, &endp, 10));
+          if (p == endp) {
+            success = false;
+            break;
+          }
+          p = endp;
+          while (*p == ',' || *p == ' ') {
+            p++;
+          }
+        }
+
+        if (success) {
+          gMOStatus = vals[0];
+          gMOMSN = vals[1];
+          gMTStatus = vals[2];
+          gMTMSN = vals[3];
+          gMTLen = vals[4];
+          gMTQueued = vals[5];
           gSBDIXSeen = true;
 
 #if IF_COMPACT
           printSBDIXCompact();
 #elif IF_VERBOSE
-          printSBDIXLegendOnce(); printSBDIXVerbose();
+          printSBDIXLegendOnce();
+          printSBDIXVerbose();
 #endif
         }
       }
@@ -136,7 +138,7 @@ void ISBDConsoleCallback(IridiumSBD *d, const char c) {
   if (idx < sizeof(line) - 1) line[idx++] = c; else idx = 0; // guard overflow
 }
 
-void ISBDDiagsCallback(IridiumSBD *d, char c) {
+void ISBDDiagsCallback(IridiumSBD *d, const char c) {
 #if IF_VERBOSE
   SerialMon.write(c); // raw only in verbose
 #endif
@@ -149,9 +151,7 @@ void ISBDDiagsCallback(IridiumSBD *d, char c) {
     line[idx] = '\0';
     idx = 0;
 #if IF_VERBOSE
-    if (line[0] != '\0') {
-      SerialMon.print("DBG: "); SerialMon.println(line);
-    }
+    if (line[0] != '\0') { SerialMon.print("DBG: "); SerialMon.println(line); }
 #endif
     return;
   }
@@ -161,21 +161,15 @@ void ISBDDiagsCallback(IridiumSBD *d, char c) {
 #endif
 
 // Forward decls
-static void pixelShowColor(uint32_t c);
-static void pixelSetMode(PixelMode mode);
-static void updateWaitingBlink();
 static bool sendTextWithIndicators(const char *text, bool urgent, bool firstAttempt);
 
 static void lowPowerDelayMs(uint32_t ms);
-static void waitWithSignalLogs(unsigned long totalMs);
 static bool netAvailHigh();
 static bool waitForNetAvailAndMinCSQ(unsigned long maxWaitMs, int minCSQ, int stableSamples);
 static bool waitWithSignalLogsUntilReady(unsigned long totalMs, int minCsq, int stableSamples);
 static bool bothButtonsPressed();
 static bool cancelRequested();
 static void cancelCurrentOperation();
-static void pixelPowerOn();
-static void pixelPowerOff();
 static void applyModemSettings();
 static bool ensureModemAwake();
 static void sleepModemBestEffort();
@@ -198,48 +192,6 @@ static void lowPowerDelayMs(uint32_t ms) {
 #endif
 }
 
-static void waitWithSignalLogs(const unsigned long totalMs) {
-  static constexpr unsigned long kSignalSampleMs = CFG_NA_SAMPLE_MS;
-  const unsigned long start = millis();
-  const unsigned long end = start + totalMs;
-  unsigned long nextSampleAt = start;
-  while (true) {
-    if (cancelRequested()) return;
-    const unsigned long now = millis();
-    if (now >= end) break;
-    updateWaitingBlink();
-    if (now >= nextSampleAt) {
-#if !IF_QUIET
-      if (PIN_ISBD_NA >= 0) {
-        SerialMon.print("NA: ");
-        SerialMon.println(netAvailHigh() ? "1" : "0");
-      }
-      if (!modem.isAsleep()) {
-        int csq = -1;
-        const int err = modem.getSignalQuality(csq);
-        if (err == ISBD_SUCCESS) {
-          SerialMon.print("CSQ: ");
-          SerialMon.print(csq);
-          SerialMon.println("/5");
-        } else {
-          SerialMon.print("CSQ read failed, err=");
-          SerialMon.println(err);
-        }
-      }
-#endif
-      nextSampleAt += kSignalSampleMs;
-      continue;
-    }
-    unsigned long nextEvent = end;
-    if (pixelMode == MODE_WAITING) {
-      const unsigned long nextBlinkAt = lastBlinkToggle + kWaitBlinkMs;
-      if (nextBlinkAt < nextEvent) nextEvent = nextBlinkAt;
-    }
-    if (nextSampleAt < nextEvent) nextEvent = nextSampleAt;
-    if (nextEvent > now) lowPowerDelayMs(nextEvent - now);
-  }
-}
-
 static bool netAvailHigh() {
 #if (PIN_ISBD_NA >= 0)
   return digitalRead(PIN_ISBD_NA) == HIGH;
@@ -252,14 +204,15 @@ static bool waitForNetAvailAndMinCSQ(const unsigned long maxWaitMs, const int mi
   const unsigned long start = millis();
   unsigned long nextSampleAt = start;
   int goodCount = 0;
+  // ReSharper disable once CppDFAConstantConditions
+  // ReSharper disable once CppDFAUnreachableCode
   if (stableSamples < 1) stableSamples = 1;
 
   while (millis() - start < maxWaitMs) {
     if (cancelRequested()) return false;
     updateWaitingBlink();
-    const unsigned long now = millis();
 
-    if (now < nextSampleAt) {
+    if (const unsigned long now = millis(); now < nextSampleAt) {
       lowPowerDelayMs(50);
       continue;
     }
@@ -301,12 +254,15 @@ static bool waitForNetAvailAndMinCSQ(const unsigned long maxWaitMs, const int mi
   return false;
 }
 
+// ReSharper disable twice CppDFAConstantParameter
 static bool waitWithSignalLogsUntilReady(const unsigned long totalMs, const int minCsq, int stableSamples) {
   static constexpr unsigned long kSignalSampleMs = CFG_NA_SAMPLE_MS;
   const unsigned long start = millis();
   const unsigned long end = start + totalMs;
   unsigned long nextSampleAt = start;
   int goodCount = 0;
+  // ReSharper disable once CppDFAConstantConditions
+  // ReSharper disable once CppDFAUnreachableCode
   if (stableSamples < 1) stableSamples = 1;
 
   while (true) {
@@ -352,9 +308,8 @@ static bool waitWithSignalLogsUntilReady(const unsigned long totalMs, const int 
     }
 
     unsigned long nextEvent = end;
-    if (pixelMode == MODE_WAITING) {
-      const unsigned long nextBlinkAt = lastBlinkToggle + kWaitBlinkMs;
-      if (nextBlinkAt < nextEvent) nextEvent = nextBlinkAt;
+    if (getPixelMode() == MODE_WAITING) {
+      if (const unsigned long nextBlinkAt = getLastBlinkToggle() + kWaitBlinkMs; nextBlinkAt < nextEvent) nextEvent = nextBlinkAt;
     }
     if (nextSampleAt < nextEvent) nextEvent = nextSampleAt;
     if (nextEvent > now) lowPowerDelayMs(nextEvent - now);
@@ -363,71 +318,12 @@ static bool waitWithSignalLogsUntilReady(const unsigned long totalMs, const int 
   return false;
 }
 
-// ---------- NeoPixel power gating ----------
-static void pixelPowerOn() {
-#if defined(NEOPIXEL_POWER)
-  if (ENABLE_NEOPIXEL_POWER_GATING) {
-    digitalWrite(NEOPIXEL_PWR, HIGH);
-    // tiny settle helps avoid first-frame weirdness on some boards
-    delayMicroseconds(200);
-  }
-#endif
-}
-
-static void pixelPowerOff() {
-#if defined(NEOPIXEL_POWER)
-  if (ENABLE_NEOPIXEL_POWER_GATING) {
-    // Turn LED off *then* remove power.
-    pixels.fill(C_OFF());
-    pixels.show();
-    digitalWrite(NEOPIXEL_PWR, LOW);
-  }
-#endif
-}
-
-// ---------- Pixel helpers ----------
-static void pixelShowColor(const uint32_t c) {
-  pixelPowerOn();
-  pixels.fill(c);
-  pixels.show();
-}
-
-static void pixelSetMode(const PixelMode mode) {
-  pixelMode = mode;
-  switch (mode) {
-    case MODE_IDLE:
-      pixelShowColor(C_OFF());
-      pixelPowerOff();
-      break;
-    case MODE_WAITING:
-      waitBlinkOn = true;
-      lastBlinkToggle = millis();
-      pixelShowColor(C_YELLOW());
-      break;
-    case MODE_FAIL:
-      pixelShowColor(C_RED());
-      break;
-    case MODE_SUCCESS:
-      pixelShowColor(C_GREEN());
-      break;
-  }
-}
-
 // Library callback (called repeatedly during modem work)
 // Blink yellow while waiting.
 bool ISBDCallback() {
   if (cancelRequested()) return false;
   updateWaitingBlink();
   return true; // never cancel
-}
-
-static void updateWaitingBlink() {
-  if (pixelMode != MODE_WAITING) return;
-  if (const unsigned long now = millis(); now - lastBlinkToggle >= kWaitBlinkMs) {
-    waitBlinkOn = !waitBlinkOn;
-    pixelShowColor(waitBlinkOn ? C_YELLOW() : C_OFF());
-    lastBlinkToggle = now;
-  }
 }
 
 static void waitForSerialIfEnabled() {
@@ -666,23 +562,23 @@ void setup() {
   SerialMon.begin(115200);
   waitForSerialIfEnabled();
 
-  // NeoPixel init + power pin
-#if defined(NEOPIXEL_POWER)
-  pinMode(NEOPIXEL_PWR, OUTPUT);
-  // start with NeoPixel power OFF
-  digitalWrite(NEOPIXEL_PWR, LOW);
-#endif
-  pixels.begin();
-  pixels.setBrightness(CFG_NEOPIXEL_BRIGHTNESS);
-  pixelSetMode(MODE_IDLE);
+  setupLeds();
 
-  // RockBLOCK UART
+  setupGps();
+
   Serial1.begin(19200);
 
-  // If sleep pin is wired, keep modem asleep/off until we actually need to send.
+  // If sleep pin is wired, activate the modem (wake it up)
 #if (PIN_ISBD_SLEEP >= 0)
   pinMode(PIN_ISBD_SLEEP, OUTPUT);
-  digitalWrite(PIN_ISBD_SLEEP, LOW);
+  // FORCE AWAKE immediately
+  digitalWrite(PIN_ISBD_SLEEP, HIGH);
+
+  // CRITICAL: Give the capacitors time to charge through your switch!
+  // Since your switch is high-resistance, the capacitors charge slower.
+  // We give it 4 seconds of "priming" time.
+  SerialMon.println("Priming RockBLOCK capacitors...");
+  delay(4000);
 #endif
 
 #if (PIN_ISBD_NA >= 0)
@@ -690,8 +586,8 @@ void setup() {
 #endif
 
 #if !IF_QUIET
-  SerialMon.println("KB2040 + RockBLOCK + NeoPixel (WAIT=blink yellow, FAIL=red, SUCCESS=green)");
-  SerialMon.println("Press D9 (ALERT) or D8 (SOS) to send.\n\n\n");
+  SerialMon.println("KB2040 + RockBLOCK + GNSS");
+  SerialMon.println("Press D9 (ALERT) or D8 (SOS) to send.");
 
   SerialMon.println();
   SerialMon.println("SBDIX fields explanation:");
@@ -725,16 +621,36 @@ void loop() {
           SerialMon.println("ALERT button pressed.");
 #endif
           sendStartMs = millis();
-          sendCtx = { "ALERT", false, true };
+
+          // Reset context
+          memset(&sendCtx, 0, sizeof(sendCtx));
+          strcpy(sendCtx.text, "ALERT");
+          sendCtx.urgent = false;
+          sendCtx.firstAttempt = true;
+
           gCancelRequested = false;
+
+          // Attempt GPS (this blocks for up to 15s or until fix/cancel)
+          // It appends coordinates to sendCtx.text
+          attemptGpsFix(sendCtx.text, cancelRequested);
+
           deviceState = DeviceState::SEND_ATTEMPT;
+
         } else if (!bothPressed && edgePressed(curSOS, lastSOS)) {
 #if !IF_QUIET
           SerialMon.println("SOS button pressed.");
 #endif
           sendStartMs = millis();
-          sendCtx = { "SOS", true, true };
+
+          memset(&sendCtx, 0, sizeof(sendCtx));
+          strcpy(sendCtx.text, "SOS");
+          sendCtx.urgent = true;
+          sendCtx.firstAttempt = true;
+
           gCancelRequested = false;
+
+          attemptGpsFix(sendCtx.text, cancelRequested);
+
           deviceState = DeviceState::SEND_ATTEMPT;
         }
         lastBounceMs = now;
