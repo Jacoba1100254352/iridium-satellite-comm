@@ -23,12 +23,8 @@
     </configurations>
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="57e4f083-aa23-42d0-b943-7e055edcfb81" name="Changes" comment="Add .gitignore and enhance configuration for low-power operation">
-      <change beforePath="$PROJECT_DIR$/.idea/editor.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/editor.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/include/config.h" beforeDir="false" afterPath="$PROJECT_DIR$/include/config.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/platformio.ini" beforeDir="false" afterPath="$PROJECT_DIR$/platformio.ini" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/main.cpp" afterDir="false" />
+    <list default="true" id="57e4f083-aa23-42d0-b943-7e055edcfb81" name="Changes" comment="Add GPS functionality and refactor LED handling for improved feedback">
+      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -317,7 +313,7 @@
       <workItem from="1768769170050" duration="102000" />
       <workItem from="1768769347357" duration="664000" />
       <workItem from="1770234441758" duration="1734000" />
-      <workItem from="1770392430924" duration="5005000" />
+      <workItem from="1770392430924" duration="5426000" />
     </task>
     <task id="LOCAL-00001" summary="Updating to use platformio">
       <option name="closed" value="true" />
@@ -359,7 +355,15 @@
       <option name="project" value="LOCAL" />
       <updated>1765998207459</updated>
     </task>
-    <option name="localTasksCounter" value="6" />
+    <task id="LOCAL-00006" summary="Add GPS functionality and refactor LED handling for improved feedback">
+      <option name="closed" value="true" />
+      <created>1770401840803</created>
+      <option name="number" value="00006" />
+      <option name="presentableId" value="LOCAL-00006" />
+      <option name="project" value="LOCAL" />
+      <updated>1770401840803</updated>
+    </task>
+    <option name="localTasksCounter" value="7" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -382,7 +386,8 @@
     <MESSAGE value="Cleaning up the COMPACT logging view." />
     <MESSAGE value="Adjusting the logs and log levels. Also implementing a temporary workaround to modem.useMSSTMWorkaround(true); not causing the correct lines to be printed. Need to fix later." />
     <MESSAGE value="Add .gitignore and enhance configuration for low-power operation" />
-    <option name="LAST_COMMIT_MESSAGE" value="Add .gitignore and enhance configuration for low-power operation" />
+    <MESSAGE value="Add GPS functionality and refactor LED handling for improved feedback" />
+    <option name="LAST_COMMIT_MESSAGE" value="Add GPS functionality and refactor LED handling for improved feedback" />
   </component>
   <component name="XSLT-Support.FileAssociations.UIState">
     <expand />
