@@ -107,7 +107,7 @@
   #define CFG_RETRY_DELAY_MS 10000UL
 #endif
 #ifndef CFG_RETRY_DELAY_NO_NETWORK_MS
-  #define CFG_RETRY_DELAY_NO_NETWORK_MS 60000UL
+  #define CFG_RETRY_DELAY_NO_NETWORK_MS 10000UL // Aggressive retry (was 60s)
 #endif
 #ifndef CFG_RETRY_DELAY_TIMEOUT_MS
   #define CFG_RETRY_DELAY_TIMEOUT_MS 10000UL
@@ -125,7 +125,7 @@
   #define CFG_MIN_CSQ_TO_SEND 2
 #endif
 #ifndef CFG_MIN_CSQ_STABLE_SAMPLES
-  #define CFG_MIN_CSQ_STABLE_SAMPLES 3
+  #define CFG_MIN_CSQ_STABLE_SAMPLES 1 // Fire immediately on good signal (was 3)
 #endif
 #ifndef CFG_FIRST_ATTEMPT_WAIT_MS
   #define CFG_FIRST_ATTEMPT_WAIT_MS 10000UL
@@ -134,13 +134,13 @@
   #define CFG_FIRST_ATTEMPT_MIN_CSQ 1
 #endif
 #ifndef CFG_FIRST_ATTEMPT_STABLE_SAMPLES
-  #define CFG_FIRST_ATTEMPT_STABLE_SAMPLES 2
+  #define CFG_FIRST_ATTEMPT_STABLE_SAMPLES 1 // Aggressive first try (was 2)
 #endif
 #ifndef CFG_ENABLE_MSSTM_WORKAROUND
   #define CFG_ENABLE_MSSTM_WORKAROUND 1
 #endif
 #ifndef CFG_NA_SAMPLE_MS
-  #define CFG_NA_SAMPLE_MS 2000UL
+  #define CFG_NA_SAMPLE_MS 1000UL // Faster polling (was 2000)
 #endif
 #ifndef CFG_SUCCESS_HOLD_MS
   #define CFG_SUCCESS_HOLD_MS 10000UL
