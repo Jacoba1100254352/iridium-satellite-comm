@@ -165,8 +165,7 @@ static bool sendTextWithIndicators(const char *text, bool urgent, bool firstAtte
 
 static void lowPowerDelayMs(uint32_t ms);
 static bool netAvailHigh();
-static bool waitForNetAvailAndMinCSQ(unsigned long maxWaitMs, int minCSQ, int stableSamples);
-static bool waitWithSignalLogsUntilReady(unsigned long totalMs, int minCsq, int stableSamples);
+static bool waitWithSignalLogsUntilReady(unsigned long totalMs, int minCsq, int stableSamples, bool allowEarlyExit);
 static bool bothButtonsPressed();
 static bool cancelRequested();
 static void cancelCurrentOperation();
@@ -200,62 +199,8 @@ static bool netAvailHigh() {
 #endif
 }
 
-static bool waitForNetAvailAndMinCSQ(const unsigned long maxWaitMs, const int minCSQ, int stableSamples) {
-  const unsigned long start = millis();
-  unsigned long nextSampleAt = start;
-  int goodCount = 0;
-  // ReSharper disable once CppDFAConstantConditions
-  // ReSharper disable once CppDFAUnreachableCode
-  if (stableSamples < 1) stableSamples = 1;
-
-  while (millis() - start < maxWaitMs) {
-    if (cancelRequested()) return false;
-    updateWaitingBlink();
-
-    if (const unsigned long now = millis(); now < nextSampleAt) {
-      lowPowerDelayMs(50);
-      continue;
-    }
-
-    const bool na = netAvailHigh();
-    int csq = -1;
-    int csqErr = ISBD_PROTOCOL_ERROR;
-
-    if (na && !modem.isAsleep()) {
-      csqErr = modem.getSignalQuality(csq);
-      if (csqErr == ISBD_SUCCESS && csq >= minCSQ) {
-        goodCount++;
-      } else {
-        goodCount = 0;
-      }
-    } else {
-      goodCount = 0;
-    }
-
-#if !IF_QUIET
-    SerialMon.print("NA: ");
-    SerialMon.print(na ? "1" : "0");
-    SerialMon.print("  CSQ: ");
-    if (!na) {
-      SerialMon.println("(skip; NA=0)");
-    } else if (csqErr == ISBD_SUCCESS) {
-      SerialMon.print(csq);
-      SerialMon.println("/5");
-    } else {
-      SerialMon.print("read failed err=");
-      SerialMon.println(csqErr);
-    }
-#endif
-
-    if (goodCount >= stableSamples) return true;
-    nextSampleAt += CFG_NA_SAMPLE_MS;
-  }
-
-  return false;
-}
-
 // ReSharper disable twice CppDFAConstantParameter
-static bool waitWithSignalLogsUntilReady(const unsigned long totalMs, const int minCsq, int stableSamples) {
+static bool waitWithSignalLogsUntilReady(const unsigned long totalMs, const int minCsq, int stableSamples, const bool allowEarlyExit) {
   static constexpr unsigned long kSignalSampleMs = CFG_NA_SAMPLE_MS;
   const unsigned long start = millis();
   const unsigned long end = start + totalMs;
@@ -302,7 +247,7 @@ static bool waitWithSignalLogsUntilReady(const unsigned long totalMs, const int 
       }
 #endif
 
-      if (goodCount >= stableSamples) return true;
+      if (allowEarlyExit && goodCount >= stableSamples) return true;
       nextSampleAt += kSignalSampleMs;
       continue;
     }
@@ -410,6 +355,7 @@ static bool sendTextWithIndicators(const char *text, const bool urgent, const bo
 #if !IF_QUIET
   SerialMon.print("Sending \""); SerialMon.print(text); SerialMon.println("\"...");
 #endif
+  (void)urgent;
   pixelSetMode(MODE_WAITING);
   if (cancelRequested()) {
     lastSendErr = ISBD_CANCELLED;
@@ -421,19 +367,9 @@ static bool sendTextWithIndicators(const char *text, const bool urgent, const bo
     return false;
   }
 
-#if (PIN_ISBD_NA >= 0)
-  const unsigned long waitBudget = firstAttempt
-    ? CFG_FIRST_ATTEMPT_WAIT_MS
-    : (urgent ? CFG_NA_WAIT_URGENT_MS : CFG_NA_WAIT_MAX_MS);
-  const int minCsq = firstAttempt ? CFG_FIRST_ATTEMPT_MIN_CSQ : CFG_MIN_CSQ_TO_SEND;
-  const int stableSamples = firstAttempt ? CFG_FIRST_ATTEMPT_STABLE_SAMPLES : CFG_MIN_CSQ_STABLE_SAMPLES;
-  if (!waitForNetAvailAndMinCSQ(waitBudget, minCsq, stableSamples)) {
 #if !IF_QUIET
-    SerialMon.println("NA/CSQ not good yet; skipping SBD session this round.");
-#endif
-    lastSendErr = ISBD_NO_NETWORK;
-    sleepModemBestEffort();
-    return false;
+  if (firstAttempt) {
+    SerialMon.println("First attempt: skipping NA/CSQ pre-gate.");
   }
 #endif
 
@@ -687,7 +623,8 @@ void loop() {
       SerialMon.println("Retrying after delay...\n\n");
 #endif
       pixelSetMode(MODE_WAITING);
-      (void)waitWithSignalLogsUntilReady(delayMs, CFG_MIN_CSQ_TO_SEND, CFG_MIN_CSQ_STABLE_SAMPLES);
+      const bool allowEarlyExit = !(lastSawSBDIX && lastMoStatus == 32);
+      (void)waitWithSignalLogsUntilReady(delayMs, CFG_MIN_CSQ_TO_SEND, CFG_MIN_CSQ_STABLE_SAMPLES, allowEarlyExit);
       deviceState = cancelRequested() ? DeviceState::CANCELLED : DeviceState::SEND_ATTEMPT;
       break;
     }
