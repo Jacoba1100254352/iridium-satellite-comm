@@ -55,6 +55,12 @@
   #define ENABLE_MODEM_SLEEP 0
 #endif
 
+// Enable staged two-button control:
+// short press = soft cancel, medium press = reset pulse, long press = sleep until send.
+#ifndef ENABLE_ADVANCED_TWO_BUTTON_ACTIONS
+  #define ENABLE_ADVANCED_TWO_BUTTON_ACTIONS 1
+#endif
+
 // RockBLOCK control pins (set to actual GPIO numbers, or leave -1 to disable)
 #ifndef PIN_ISBD_SLEEP
   #define PIN_ISBD_SLEEP 2
@@ -104,13 +110,19 @@
 
 // Timing
 #ifndef CFG_RETRY_DELAY_MS
-  #define CFG_RETRY_DELAY_MS 10000UL
+  #define CFG_RETRY_DELAY_MS 5000UL
 #endif
 #ifndef CFG_RETRY_DELAY_NO_NETWORK_MS
-  #define CFG_RETRY_DELAY_NO_NETWORK_MS 60000UL
+  #define CFG_RETRY_DELAY_NO_NETWORK_MS 30000UL
 #endif
 #ifndef CFG_RETRY_DELAY_TIMEOUT_MS
   #define CFG_RETRY_DELAY_TIMEOUT_MS 10000UL
+#endif
+#ifndef CFG_RETRY_DELAY_SLOW_MS
+  #define CFG_RETRY_DELAY_SLOW_MS 60000UL
+#endif
+#ifndef CFG_RETRY_DELAY_ANTENNA_MS
+  #define CFG_RETRY_DELAY_ANTENNA_MS 10000UL
 #endif
 #ifndef CFG_FAILURE_GRACE_MS
   #define CFG_FAILURE_GRACE_MS 30000UL
@@ -130,6 +142,18 @@
 #ifndef CFG_FIRST_ATTEMPT_WAIT_MS
   #define CFG_FIRST_ATTEMPT_WAIT_MS 0UL
 #endif
+#ifndef CFG_MODEM_WAKE_BEFORE_SEND_MS
+  #define CFG_MODEM_WAKE_BEFORE_SEND_MS 3000UL
+#endif
+#ifndef CFG_TWO_BUTTON_SOFT_CANCEL_MAX_MS
+  #define CFG_TWO_BUTTON_SOFT_CANCEL_MAX_MS 2000UL
+#endif
+#ifndef CFG_TWO_BUTTON_SLEEP_PULSE_MS
+  #define CFG_TWO_BUTTON_SLEEP_PULSE_MS 3000UL
+#endif
+#ifndef CFG_TWO_BUTTON_SLEEP_LATCH_TRIGGER_MS
+  #define CFG_TWO_BUTTON_SLEEP_LATCH_TRIGGER_MS 10000UL
+#endif
 #ifndef CFG_FIRST_ATTEMPT_MIN_CSQ
   #define CFG_FIRST_ATTEMPT_MIN_CSQ 1
 #endif
@@ -137,7 +161,14 @@
   #define CFG_FIRST_ATTEMPT_STABLE_SAMPLES 1 // Aggressive first try (was 2)
 #endif
 #ifndef CFG_ENABLE_MSSTM_WORKAROUND
-  #define CFG_ENABLE_MSSTM_WORKAROUND 1
+  // -1 = let the library auto-decide based on modem firmware
+  //  0 = force off
+  //  1 = force on
+  #define CFG_ENABLE_MSSTM_WORKAROUND -1
+#endif
+#ifndef CFG_GPS_SEND_FIX_TIMEOUT_MS
+  // 0 = do not block a send waiting for a fresh GNSS fix
+  #define CFG_GPS_SEND_FIX_TIMEOUT_MS 0UL
 #endif
 #ifndef CFG_NA_SAMPLE_MS
   #define CFG_NA_SAMPLE_MS 1000UL // Faster polling (was 2000)
@@ -147,6 +178,9 @@
 #endif
 #ifndef CFG_WAIT_BLINK_MS
   #define CFG_WAIT_BLINK_MS 250UL
+#endif
+#ifndef CFG_RETRY_WAIT_BLINK_MS
+  #define CFG_RETRY_WAIT_BLINK_MS 800UL
 #endif
 
 // Idle loop pacing (prevents “spin hot” while doing nothing)
@@ -159,13 +193,13 @@
   #define CFG_MODEM_AT_TIMEOUT_S 30
 #endif
 #ifndef CFG_MODEM_SENDRECV_TIMEOUT_S
-  #define CFG_MODEM_SENDRECV_TIMEOUT_S 300
+  #define CFG_MODEM_SENDRECV_TIMEOUT_S 90
 #endif
 #ifndef CFG_MODEM_STARTUP_TIMEOUT_S
   #define CFG_MODEM_STARTUP_TIMEOUT_S 120
 #endif
 #ifndef CFG_MODEM_SESSION_TIMEOUT_S
-  #define CFG_MODEM_SESSION_TIMEOUT_S 300
+  #define CFG_MODEM_SESSION_TIMEOUT_S 90
 #endif
 
 #endif // IRIDIUM_SATELLITE_COMM_CONFIG_H

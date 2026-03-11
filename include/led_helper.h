@@ -4,7 +4,7 @@
 #include <Arduino.h>
 #include <Adafruit_NeoPixel.h>
 
-enum PixelMode : uint8_t { MODE_IDLE, MODE_WAITING, MODE_FAIL, MODE_SUCCESS, MODE_GPS_SEARCH };
+enum PixelMode : uint8_t { MODE_IDLE, MODE_WAITING, MODE_RETRY_WAIT, MODE_FAIL, MODE_SUCCESS, MODE_GPS_SEARCH };
 
 void setupLeds();
 void pixelShowColor(uint32_t c);
@@ -19,6 +19,7 @@ unsigned long getLastBlinkToggle();
 uint32_t C_RED();
 uint32_t C_GREEN();
 uint32_t C_YELLOW();
+uint32_t C_ORANGE();
 uint32_t C_BLUE();
 uint32_t C_OFF();
 

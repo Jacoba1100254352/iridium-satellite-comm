@@ -21,18 +21,26 @@ static GpsFix lastKnownFix;
 static unsigned long lastBackgroundPollMs = 0;
 
 static constexpr unsigned long GPS_BACKGROUND_POLL_MS = 5 * 60 * 1000UL; // 5 minutes
-static constexpr unsigned long kGpsFixTimeoutMs = 15000;
+static constexpr unsigned long kGpsFixTimeoutMs = CFG_GPS_SEND_FIX_TIMEOUT_MS;
 static volatile unsigned long lastPpsMs = 0;
 static volatile bool ppsActive = false;
 static bool gnssInitialized = false;
 static bool waitingMsgShown = false;
 
 // Interrupt handler for PPS signal
+/**
+ * Records the latest GNSS PPS pulse so the rest of the firmware can tell
+ * whether the receiver appears to be actively timing-valid in the background.
+ */
 void ppsInterrupt() {
     lastPpsMs = millis();
     ppsActive = true;
 }
 
+/**
+ * Reports whether a recent PPS pulse has been seen, which acts as a coarse
+ * "GNSS is alive and recently timed" hint for diagnostics.
+ */
 bool hasBackgroundFix() {
     if (!ppsActive) return false;
     if (millis() - lastPpsMs > 1500) {
@@ -42,6 +50,10 @@ bool hasBackgroundFix() {
     return true;
 }
 
+/**
+ * Copies the current GNSS fix and timestamp into the retained last-known-fix
+ * structure so sends can fall back to useful location metadata immediately.
+ */
 static void updateLastKnown() {
     if (myGNSS.getGnssFixOk()) {
         lastKnownFix.lat = static_cast<float>(myGNSS.getLatitude()) / 10000000.0f;
@@ -79,6 +91,10 @@ static void updateLastKnown() {
     }
 }
 
+/**
+ * Resets and initializes the GNSS receiver, configures its I2C transport, and
+ * attaches the PPS interrupt used for low-cost background fix monitoring.
+ */
 void setupGps() {
     // 1. Handle Hardware Reset
 #if (PIN_GPS_RST >= 0)
@@ -132,6 +148,10 @@ void setupGps() {
 #endif
 }
 
+/**
+ * Polls GNSS state opportunistically in the background so a later send can use
+ * either a fresh fix or the most recent retained location without blocking.
+ */
 void processGps() {
     if (!gnssInitialized) return;
 
@@ -154,6 +174,10 @@ void processGps() {
     }
 }
 
+/**
+ * Appends either a fresh or last-known GNSS fix to the outbound message text
+ * using the compact operator-facing payload format used by the project.
+ */
 static void appendFixToBuffer(char* buffer, const GpsFix& fix, bool isLKG) {
     const size_t currentLen = strlen(buffer);
     snprintf(buffer + currentLen, 120 - currentLen,
@@ -162,6 +186,11 @@ static void appendFixToBuffer(char* buffer, const GpsFix& fix, bool isLKG) {
              fix.lat, fix.lon, fix.hour, fix.minute, fix.second);
 }
 
+/**
+ * Adds GNSS data to the outbound payload without unnecessarily blocking the
+ * send path: use a fresh fix if one is already available, otherwise fall back
+ * to last-known-good data or NOFIX, with optional bounded search if enabled.
+ */
 void attemptGpsFix(char* outputBuffer, bool (*cancelCheck)()) {
     if (!gnssInitialized) {
 #if !IF_QUIET
@@ -177,10 +206,30 @@ void attemptGpsFix(char* outputBuffer, bool (*cancelCheck)()) {
         return;
     }
 
-    // 2. Search for a new fix (15s timeout)
+    if (lastKnownFix.valid) {
+        appendFixToBuffer(outputBuffer, lastKnownFix, true);
+#if !IF_QUIET
+        SerialMon.print(F("GPS send uses LKG fix immediately: "));
+        SerialMon.println(outputBuffer);
+#endif
+        return;
+    }
+
+    if (kGpsFixTimeoutMs == 0) {
+        const size_t currentLen = strlen(outputBuffer);
+        snprintf(outputBuffer + currentLen, 120 - currentLen, " NOFIX");
+#if !IF_QUIET
+        SerialMon.println(F("GPS send skips fresh-fix wait; no prior fix available."));
+#endif
+        return;
+    }
+
+    // 2. Search for a new fix (timeout is configurable; 0 disables blocking search)
     pixelSetMode(MODE_GPS_SEARCH);
 #if !IF_QUIET
-    SerialMon.println(F("Searching for new GPS fix (15s timeout)..."));
+    SerialMon.print(F("Searching for new GPS fix ("));
+    SerialMon.print(kGpsFixTimeoutMs / 1000UL);
+    SerialMon.println(F("s timeout)..."));
 #endif
 
     const unsigned long startSearch = millis();
@@ -216,7 +265,7 @@ void attemptGpsFix(char* outputBuffer, bool (*cancelCheck)()) {
 #endif
     } else {
         const size_t currentLen = strlen(outputBuffer);
-        snprintf(outputBuffer + currentLen, 120 - currentLen, " No precise fix obtained");
+        snprintf(outputBuffer + currentLen, 120 - currentLen, " NOFIX");
 #if !IF_QUIET
         SerialMon.println(F("GPS Timeout. No previous fix available."));
 #endif

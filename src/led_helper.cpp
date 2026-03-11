@@ -17,6 +17,7 @@ static bool waitBlinkOn = false;
 static unsigned long lastBlinkToggle = 0;
 
 static constexpr unsigned long kWaitBlinkMs = CFG_WAIT_BLINK_MS;
+static constexpr unsigned long kRetryWaitBlinkMs = CFG_RETRY_WAIT_BLINK_MS;
 
 void setupLeds() {
 #if defined(NEOPIXEL_POWER)
@@ -67,6 +68,11 @@ void pixelSetMode(const PixelMode mode) {
             lastBlinkToggle = millis();
             pixelShowColor(C_YELLOW());
             break;
+        case MODE_RETRY_WAIT:
+            waitBlinkOn = true;
+            lastBlinkToggle = millis();
+            pixelShowColor(C_ORANGE());
+            break;
         case MODE_FAIL:
             pixelShowColor(C_RED());
             break;
@@ -80,10 +86,12 @@ void pixelSetMode(const PixelMode mode) {
 }
 
 void updateWaitingBlink() {
-    if (pixelMode != MODE_WAITING) return;
-    if (const unsigned long now = millis(); now - lastBlinkToggle >= kWaitBlinkMs) {
+    const unsigned long blinkMs = (pixelMode == MODE_RETRY_WAIT) ? kRetryWaitBlinkMs : kWaitBlinkMs;
+    if (pixelMode != MODE_WAITING && pixelMode != MODE_RETRY_WAIT) return;
+    if (const unsigned long now = millis(); now - lastBlinkToggle >= blinkMs) {
         waitBlinkOn = !waitBlinkOn;
-        pixelShowColor(waitBlinkOn ? C_YELLOW() : C_OFF());
+        const uint32_t activeColor = (pixelMode == MODE_RETRY_WAIT) ? C_ORANGE() : C_YELLOW();
+        pixelShowColor(waitBlinkOn ? activeColor : C_OFF());
         lastBlinkToggle = now;
     }
 }
@@ -100,5 +108,6 @@ unsigned long getLastBlinkToggle() {
 uint32_t C_RED()    { return Adafruit_NeoPixel::Color(255, 0,   0  ); }
 uint32_t C_GREEN()  { return Adafruit_NeoPixel::Color(0,   255, 0  ); }
 uint32_t C_YELLOW() { return Adafruit_NeoPixel::Color(255, 200, 0  ); }
+uint32_t C_ORANGE() { return Adafruit_NeoPixel::Color(255, 80,  0  ); }
 uint32_t C_BLUE()   { return Adafruit_NeoPixel::Color(0,   0,   255); }
 uint32_t C_OFF()    { return Adafruit_NeoPixel::Color(0,   0,   0  ); }

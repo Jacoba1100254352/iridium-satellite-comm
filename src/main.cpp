@@ -27,12 +27,14 @@ static constexpr unsigned long kWaitBlinkMs     = CFG_WAIT_BLINK_MS;
 // =========================
 // State / Types
 // =========================
-enum class DeviceState : uint8_t { IDLE, SEND_ATTEMPT, RETRY_WAIT, SUCCESS_HOLD, CANCELLED };
+enum class DeviceState : uint8_t { IDLE, MODEM_WAKE_WAIT, SEND_ATTEMPT, RETRY_WAIT, SUCCESS_HOLD, CANCELLED, MODEM_RESET_PULSE };
+enum class TwoButtonAction : uint8_t { NONE, SOFT_CANCEL, RESET_PULSE, LATCH_SLEEP };
 
 struct SendContext {
   char text[120]; // Changed from const char* to buffer to allow appending coords
   bool urgent;
   bool firstAttempt;
+  uint8_t attemptCount;
 };
 
 static auto deviceState = DeviceState::IDLE;
@@ -43,6 +45,13 @@ static int lastSendErr = ISBD_SUCCESS;
 static int lastMoStatus = -1;
 static bool lastSawSBDIX = false;
 static volatile bool gCancelRequested = false;
+static bool gModemConfigured = false;
+static volatile TwoButtonAction gPendingTwoButtonAction = TwoButtonAction::NONE;
+static bool gTwoButtonHoldActive = false;
+static bool gTwoButtonLongActionTriggered = false;
+static unsigned long gTwoButtonHoldStartMs = 0;
+static bool gModemSleepLatched = false;
+static unsigned long gStateDeadlineMs = 0;
 
 // SBDIX status (updated by console callback)
 // static volatile bool gLastMOSuccess = false;
@@ -69,6 +78,10 @@ IridiumSBD modem(Serial1);
 #endif
 
 #if DIAGNOSTICS
+/**
+ * Mirrors raw modem console output and parses completed SBDIX lines into the
+ * shared diagnostic fields used by the retry logic and operator-facing logs.
+ */
 void ISBDConsoleCallback(IridiumSBD *d, const char c) {
 #if IF_VERBOSE
   SerialMon.write(c);
@@ -138,6 +151,10 @@ void ISBDConsoleCallback(IridiumSBD *d, const char c) {
   if (idx < sizeof(line) - 1) line[idx++] = c; else idx = 0; // guard overflow
 }
 
+/**
+ * Mirrors library diagnostic output without affecting modem behavior so the
+ * serial console can show timing and state transitions during a send.
+ */
 void ISBDDiagsCallback(IridiumSBD *d, const char c) {
 #if IF_VERBOSE
   SerialMon.write(c); // raw only in verbose
@@ -162,18 +179,56 @@ void ISBDDiagsCallback(IridiumSBD *d, const char c) {
 
 // Forward decls
 static bool sendTextWithIndicators(const char *text, bool urgent, bool firstAttempt);
+static size_t buildOutboundMessage(const char *baseText, char *out, size_t outSize);
 
 static void lowPowerDelayMs(uint32_t ms);
+static void waitWithSignalLogs(unsigned long totalMs);
 static bool netAvailHigh();
-static bool waitWithSignalLogsUntilReady(unsigned long totalMs, int minCsq, int stableSamples, bool allowEarlyExit);
 static bool bothButtonsPressed();
+static void updateTwoButtonControl();
 static bool cancelRequested();
 static void cancelCurrentOperation();
 static void applyModemSettings();
 static bool ensureModemAwake();
 static void sleepModemBestEffort();
+static unsigned long randomRetryDelayMs(unsigned long maxDelayMs);
+static void setModemSleepPin(bool awake);
+static void activateLatchedSleepMode();
+static void beginModemResetPulse();
+static void finishModemResetPulse();
+static void beginWakeBeforeSend();
+static void startSendRequest(const char *text, bool urgent);
+
+/**
+ * Builds the plain-text outbound payload by appending the elapsed whole-second
+ * send timer suffix to the current message body for the next outer attempt.
+ */
+static size_t buildOutboundMessage(const char *baseText, char *out, const size_t outSize) {
+  if (outSize == 0) return 0;
+
+  unsigned long elapsedSeconds = 0;
+  if (sendStartMs != 0) {
+    elapsedSeconds = (millis() - sendStartMs) / 1000UL;
+  }
+
+  char suffix[16] = {};
+  snprintf(suffix, sizeof(suffix), "%lus", elapsedSeconds);
+
+  const size_t suffixLen = strnlen(suffix, sizeof(suffix));
+  const size_t maxBaseLen = (outSize - 1 > suffixLen) ? (outSize - 1 - suffixLen) : 0;
+  const size_t baseLen = strnlen(baseText, maxBaseLen);
+
+  memcpy(out, baseText, baseLen);
+  memcpy(out + baseLen, suffix, suffixLen);
+  out[baseLen + suffixLen] = '\0';
+  return baseLen + suffixLen;
+}
 
 // ---------- Low-power delay ----------
+/**
+ * Sleeps in chunks so the MCU can idle without busy-spinning while still
+ * waking often enough to service LED updates and cancel checks.
+ */
 static void lowPowerDelayMs(uint32_t ms) {
 #if defined(ARDUINO_ARCH_RP2040)
   // sleep_ms() is Pico SDK; it idles efficiently vs tight spinning.  [oai_citation:2‡Arduino-Pico](https://arduino-pico.readthedocs.io/en/latest/sdk.html)
@@ -191,6 +246,61 @@ static void lowPowerDelayMs(uint32_t ms) {
 #endif
 }
 
+/**
+ * Runs the outer retry delay while continuing LED animation, button-driven
+ * cancel handling, and periodic signal logging for visibility into wait state.
+ */
+static void waitWithSignalLogs(const unsigned long totalMs) {
+  static constexpr unsigned long kSignalSampleMs = CFG_NA_SAMPLE_MS;
+  const unsigned long start = millis();
+  const unsigned long end = start + totalMs;
+  unsigned long nextSampleAt = start;
+
+  while (true) {
+    if (cancelRequested()) return;
+    const unsigned long now = millis();
+    if (now >= end) break;
+    updateWaitingBlink();
+
+    if (now >= nextSampleAt) {
+#if !IF_QUIET
+      if (PIN_ISBD_NA >= 0) {
+        SerialMon.print("NA: ");
+        SerialMon.println(netAvailHigh() ? "1" : "0");
+      }
+      if (!modem.isAsleep()) {
+        int csq = -1;
+        const int err = modem.getSignalQuality(csq);
+        if (err == ISBD_SUCCESS) {
+          SerialMon.print("CSQ: ");
+          SerialMon.print(csq);
+          SerialMon.println("/5");
+        } else {
+          SerialMon.print("CSQ read failed, err=");
+          SerialMon.println(err);
+        }
+      }
+#endif
+      nextSampleAt += kSignalSampleMs;
+      continue;
+    }
+
+    unsigned long nextEvent = end;
+    if (const PixelMode pixelMode = getPixelMode(); pixelMode == MODE_WAITING || pixelMode == MODE_RETRY_WAIT) {
+      const unsigned long blinkMs = (pixelMode == MODE_RETRY_WAIT) ? CFG_RETRY_WAIT_BLINK_MS : kWaitBlinkMs;
+      if (const unsigned long nextBlinkAt = getLastBlinkToggle() + blinkMs; nextBlinkAt < nextEvent) {
+        nextEvent = nextBlinkAt;
+      }
+    }
+    if (nextSampleAt < nextEvent) nextEvent = nextSampleAt;
+    if (nextEvent > now) lowPowerDelayMs(nextEvent - now);
+  }
+}
+
+/**
+ * Returns the current level of the RockBLOCK NetAv pin when present, which is
+ * useful for logging but not used as a blocking precondition for sends.
+ */
 static bool netAvailHigh() {
 #if (PIN_ISBD_NA >= 0)
   return digitalRead(PIN_ISBD_NA) == HIGH;
@@ -199,97 +309,126 @@ static bool netAvailHigh() {
 #endif
 }
 
-// ReSharper disable twice CppDFAConstantParameter
-static bool waitWithSignalLogsUntilReady(const unsigned long totalMs, const int minCsq, int stableSamples, const bool allowEarlyExit) {
-  static constexpr unsigned long kSignalSampleMs = CFG_NA_SAMPLE_MS;
-  const unsigned long start = millis();
-  const unsigned long end = start + totalMs;
-  unsigned long nextSampleAt = start;
-  int goodCount = 0;
-  // ReSharper disable once CppDFAConstantConditions
-  // ReSharper disable once CppDFAUnreachableCode
-  if (stableSamples < 1) stableSamples = 1;
-
-  while (true) {
-    if (cancelRequested()) return false;
-    const unsigned long now = millis();
-    if (now >= end) break;
-    updateWaitingBlink();
-
-    if (now >= nextSampleAt) {
-      const bool na = netAvailHigh();
-      int csq = -1;
-      int csqErr = ISBD_PROTOCOL_ERROR;
-
-      if (na && !modem.isAsleep()) {
-        csqErr = modem.getSignalQuality(csq);
-        if (csqErr == ISBD_SUCCESS && csq >= minCsq) {
-          goodCount++;
-        } else {
-          goodCount = 0;
-        }
-      } else {
-        goodCount = 0;
-      }
-
-#if !IF_QUIET
-      SerialMon.print("NA: ");
-      SerialMon.print(na ? "1" : "0");
-      SerialMon.print("  CSQ: ");
-      if (!na) {
-        SerialMon.println("(skip; NA=0)");
-      } else if (csqErr == ISBD_SUCCESS) {
-        SerialMon.print(csq);
-        SerialMon.println("/5");
-      } else {
-        SerialMon.print("read failed err=");
-        SerialMon.println(csqErr);
-      }
-#endif
-
-      if (allowEarlyExit && goodCount >= stableSamples) return true;
-      nextSampleAt += kSignalSampleMs;
-      continue;
-    }
-
-    unsigned long nextEvent = end;
-    if (getPixelMode() == MODE_WAITING) {
-      if (const unsigned long nextBlinkAt = getLastBlinkToggle() + kWaitBlinkMs; nextBlinkAt < nextEvent) nextEvent = nextBlinkAt;
-    }
-    if (nextSampleAt < nextEvent) nextEvent = nextSampleAt;
-    if (nextEvent > now) lowPowerDelayMs(nextEvent - now);
-  }
-
-  return false;
-}
-
 // Library callback (called repeatedly during modem work)
 // Blink yellow while waiting.
+/**
+ * Gives the Iridium library a fast cancel hook and keeps the active-send LED
+ * animation alive during long blocking modem transactions.
+ */
 bool ISBDCallback() {
   if (cancelRequested()) return false;
   updateWaitingBlink();
   return true; // never cancel
 }
 
+/**
+ * Waits briefly for the USB serial monitor at boot when that behavior is
+ * enabled in config, otherwise returns immediately for fastest startup.
+ */
 static void waitForSerialIfEnabled() {
   if constexpr (WAIT_FOR_USB_SERIAL_MS == 0) return;
   const unsigned long start = millis();
   while (!SerialMon && (millis() - start < WAIT_FOR_USB_SERIAL_MS)) { delay(10); }
 }
 
+/**
+ * Reports whether both user buttons are currently asserted together, which is
+ * the gesture used for staged cancel, reset-pulse, and sleep-until-send modes.
+ */
 static bool bothButtonsPressed() {
   return digitalRead(BTN_ALERT) == LOW && digitalRead(BTN_SOS) == LOW;
 }
 
+/**
+ * Interprets the dual-button hold gesture when advanced handling is enabled.
+ *
+ * Behavior:
+ * - release before CFG_TWO_BUTTON_SOFT_CANCEL_MAX_MS: soft-cancel the active operation
+ * - release after that but before CFG_TWO_BUTTON_SLEEP_LATCH_TRIGGER_MS: pulse the
+ *   RockBLOCK sleep pin low for CFG_TWO_BUTTON_SLEEP_PULSE_MS
+ * - hold through CFG_TWO_BUTTON_SLEEP_LATCH_TRIGGER_MS: immediately latch the
+ *   RockBLOCK asleep until the next send request wakes it
+ *
+ * The first two actions only trigger on release. The long-hold action triggers
+ * as soon as the threshold is reached so the user does not need to release to
+ * force the modem into the latched-sleep state.
+ */
+static void updateTwoButtonControl() {
+#if (ENABLE_ADVANCED_TWO_BUTTON_ACTIONS == 1)
+  const bool bothPressed = bothButtonsPressed();
+  const unsigned long now = millis();
+
+  if (bothPressed) {
+    if (!gTwoButtonHoldActive) {
+      gTwoButtonHoldActive = true;
+      gTwoButtonLongActionTriggered = false;
+      gTwoButtonHoldStartMs = now;
+      return;
+    }
+
+    if (!gTwoButtonLongActionTriggered &&
+        (now - gTwoButtonHoldStartMs) >= CFG_TWO_BUTTON_SLEEP_LATCH_TRIGGER_MS) {
+      gTwoButtonLongActionTriggered = true;
+      activateLatchedSleepMode();
+      if (deviceState != DeviceState::IDLE) {
+        gPendingTwoButtonAction = TwoButtonAction::LATCH_SLEEP;
+        gCancelRequested = true;
+      }
+    }
+    return;
+  }
+
+  if (!gTwoButtonHoldActive) return;
+
+  const unsigned long heldMs = now - gTwoButtonHoldStartMs;
+  const bool longActionTriggered = gTwoButtonLongActionTriggered;
+  gTwoButtonHoldActive = false;
+  gTwoButtonLongActionTriggered = false;
+
+  if (longActionTriggered) return;
+
+  if (heldMs < CFG_TWO_BUTTON_SOFT_CANCEL_MAX_MS) {
+    if (deviceState != DeviceState::IDLE) {
+      gPendingTwoButtonAction = TwoButtonAction::SOFT_CANCEL;
+      gCancelRequested = true;
+    }
+    return;
+  }
+
+  if (heldMs < CFG_TWO_BUTTON_SLEEP_LATCH_TRIGGER_MS) {
+    if (deviceState == DeviceState::IDLE) {
+      beginModemResetPulse();
+    } else {
+      gPendingTwoButtonAction = TwoButtonAction::RESET_PULSE;
+      gCancelRequested = true;
+    }
+  }
+#else
+  if (deviceState != DeviceState::IDLE && bothButtonsPressed()) {
+    gCancelRequested = true;
+  }
+#endif
+}
+
+/**
+ * Centralizes cancel evaluation so every long-running path uses the same
+ * button gesture handling before deciding whether to abort current work.
+ */
 static bool cancelRequested() {
-  if (deviceState != DeviceState::IDLE && bothButtonsPressed()) gCancelRequested = true;
+  updateTwoButtonControl();
   return gCancelRequested;
 }
 
+/**
+ * Performs the common software-side cleanup for a cancelled send flow without
+ * rebooting the MCU: clear send timing/state, stop LEDs, and force modem
+ * configuration to be rebuilt on the next attempt.
+ */
 static void cancelCurrentOperation() {
   lastSendErr = ISBD_CANCELLED;
   lastMoStatus = -1;
   lastSawSBDIX = false;
+  gModemConfigured = false;
   pixelSetMode(MODE_IDLE);
   successUntil = 0;
   sendStartMs = 0;
@@ -303,35 +442,142 @@ static void cancelCurrentOperation() {
   gCancelRequested = false;
 }
 
+/**
+ * Drives the RockBLOCK sleep-control pin directly when it is wired, allowing
+ * the firmware to hold the modem awake or asleep outside library-managed sleep.
+ */
+static void setModemSleepPin(const bool awake) {
+#if (PIN_ISBD_SLEEP >= 0)
+  digitalWrite(PIN_ISBD_SLEEP, awake ? HIGH : LOW);
+#else
+  (void)awake;
+#endif
+}
+
+/**
+ * Forces the RockBLOCK into an idle latched-sleep state and leaves it there
+ * until the next send request explicitly wakes it and waits for recharge.
+ */
+static void activateLatchedSleepMode() {
+#if (PIN_ISBD_SLEEP >= 0)
+  setModemSleepPin(false);
+  gModemSleepLatched = true;
+  gModemConfigured = false;
+  pixelSetMode(MODE_IDLE);
+  successUntil = 0;
+#endif
+}
+
+/**
+ * Starts the medium-hold reset pulse by holding the RockBLOCK sleep pin low
+ * for CFG_TWO_BUTTON_SLEEP_PULSE_MS before returning the device to idle.
+ */
+static void beginModemResetPulse() {
+#if (PIN_ISBD_SLEEP >= 0)
+  gPendingTwoButtonAction = TwoButtonAction::NONE;
+  gModemSleepLatched = false;
+  gModemConfigured = false;
+  setModemSleepPin(false);
+  gStateDeadlineMs = millis() + CFG_TWO_BUTTON_SLEEP_PULSE_MS;
+  pixelSetMode(MODE_IDLE);
+#if !IF_QUIET
+  SerialMon.print("RockBLOCK sleep pulse for ");
+  SerialMon.print(CFG_TWO_BUTTON_SLEEP_PULSE_MS);
+  SerialMon.println(" ms.");
+#endif
+  deviceState = DeviceState::MODEM_RESET_PULSE;
+#else
+  gPendingTwoButtonAction = TwoButtonAction::NONE;
+  deviceState = DeviceState::IDLE;
+#endif
+}
+
+/**
+ * Ends the medium-hold reset pulse, reasserts the sleep pin high, and leaves
+ * the next send to perform a full modem reconfiguration from idle.
+ */
+static void finishModemResetPulse() {
+#if (PIN_ISBD_SLEEP >= 0)
+  setModemSleepPin(true);
+#endif
+  gStateDeadlineMs = 0;
+  gModemConfigured = false;
+  pixelSetMode(MODE_IDLE);
+  deviceState = DeviceState::IDLE;
+}
+
+/**
+ * Wakes a previously latched-asleep RockBLOCK, starts the yellow send LED
+ * immediately, and delays the first send attempt for the configured recharge
+ * interval so the modem's bulk capacitance can refill.
+ */
+static void beginWakeBeforeSend() {
+#if (PIN_ISBD_SLEEP >= 0)
+  setModemSleepPin(true);
+#endif
+  gModemSleepLatched = false;
+  gModemConfigured = false;
+  gStateDeadlineMs = millis() + CFG_MODEM_WAKE_BEFORE_SEND_MS;
+  pixelSetMode(MODE_WAITING);
+#if !IF_QUIET
+  SerialMon.print("Waking RockBLOCK before send for ");
+  SerialMon.print(CFG_MODEM_WAKE_BEFORE_SEND_MS);
+  SerialMon.println(" ms.");
+#endif
+  deviceState = DeviceState::MODEM_WAKE_WAIT;
+}
+
+/**
+ * Initializes a new button-driven send request, captures GNSS/LKG metadata,
+ * clears prior cancel state, and either enters the send state immediately or
+ * starts the pre-send wake delay when the modem was latched asleep.
+ */
+static void startSendRequest(const char *text, const bool urgent) {
+  sendStartMs = millis();
+  memset(&sendCtx, 0, sizeof(sendCtx));
+  strncpy(sendCtx.text, text, sizeof(sendCtx.text) - 1);
+  sendCtx.urgent = urgent;
+  sendCtx.firstAttempt = true;
+  sendCtx.attemptCount = 0;
+  gCancelRequested = false;
+  gPendingTwoButtonAction = TwoButtonAction::NONE;
+  const bool wakingFromLatchedSleep = (ENABLE_ADVANCED_TWO_BUTTON_ACTIONS == 1) && gModemSleepLatched;
+  if (wakingFromLatchedSleep) {
+    beginWakeBeforeSend();
+  }
+  attemptGpsFix(sendCtx.text, cancelRequested);
+
+  if (!wakingFromLatchedSleep) deviceState = DeviceState::SEND_ATTEMPT;
+}
+
 // ---------- Modem helpers ----------
+/**
+ * Applies the project's chosen Iridium library settings so each fresh modem
+ * session uses the intended power profile, timeout values, and MSSTM policy.
+ */
 static void applyModemSettings() {
   modem.setPowerProfile(IridiumSBD::DEFAULT_POWER_PROFILE);
+#if (CFG_ENABLE_MSSTM_WORKAROUND >= 0)
   modem.useMSSTMWorkaround(CFG_ENABLE_MSSTM_WORKAROUND == 1);
+#endif
   modem.adjustATTimeout(CFG_MODEM_AT_TIMEOUT_S);
   modem.adjustSendReceiveTimeout(CFG_MODEM_SENDRECV_TIMEOUT_S);
   modem.adjustStartupTimeout(CFG_MODEM_STARTUP_TIMEOUT_S);
   modem.adjustSBDSessionTimeout(CFG_MODEM_SESSION_TIMEOUT_S);
 }
 
-static bool ensureModemAwake() {
-#if (PIN_ISBD_SLEEP < 0) && (ENABLE_MODEM_SLEEP == 1)
-  // No sleep pin wired; can't do real sleep/wake cycling.
-#endif
-
-  if (!modem.isAsleep()) {
-    applyModemSettings();
-#if (PIN_ISBD_RI >= 0)
-    modem.enableRingAlerts(true);
-#endif
-    return true;
-  }
-
+/**
+ * Runs modem.begin() and, on success, applies project-level modem settings so
+ * later send attempts can skip redundant begin/configure work while awake.
+ */
+static bool beginAndConfigureModem() {
   const int err = modem.begin();
-  if (err == ISBD_SUCCESS) {
+  if (err == ISBD_SUCCESS || err == ISBD_ALREADY_AWAKE) {
     applyModemSettings();
 #if (PIN_ISBD_RI >= 0)
     modem.enableRingAlerts(true);
 #endif
+    gModemConfigured = true;
     return true;
   }
 
@@ -339,9 +585,30 @@ static bool ensureModemAwake() {
   SerialMon.print("modem.begin() failed, err="); SerialMon.println(err);
   if (err == ISBD_NO_MODEM_DETECTED) SerialMon.println("No modem detected.");
 #endif
+  gModemConfigured = false;
   return false;
 }
 
+/**
+ * Ensures the modem is ready for use, reusing a known-good configured session
+ * when possible and falling back to a full begin/configure when required.
+ */
+static bool ensureModemAwake() {
+#if (PIN_ISBD_SLEEP < 0) && (ENABLE_MODEM_SLEEP == 1)
+  // No sleep pin wired; can't do real sleep/wake cycling.
+#endif
+
+  if (gModemConfigured && !modem.isAsleep()) {
+    return true;
+  }
+
+  return beginAndConfigureModem();
+}
+
+/**
+ * Puts the modem to sleep only when library-managed sleep is enabled; in the
+ * default fast-send profile this is intentionally a no-op.
+ */
 static void sleepModemBestEffort() {
   if constexpr (ENABLE_MODEM_SLEEP != 1) return;
 
@@ -350,10 +617,29 @@ static void sleepModemBestEffort() {
   (void)err; // best-effort: ignore errors (e.g., ISBD_NO_SLEEP_PIN)
 }
 
+/**
+ * Adds a small randomized jitter to retry delays so repeated sends do not
+ * re-attempt on the exact same cadence after transient network failures.
+ */
+static unsigned long randomRetryDelayMs(const unsigned long maxDelayMs) {
+  if (maxDelayMs == 0) return 0;
+  return static_cast<unsigned long>(random(maxDelayMs + 1UL));
+}
+
 // Build small MO payload: [len8][ASCII bytes...], perform send, and drive NeoPixel states.
+/**
+ * Performs one outer send attempt: build the text payload for this attempt,
+ * ensure the modem is ready, run the blocking Iridium send call, and translate
+ * the library result into local success/failure state for the outer loop.
+ */
 static bool sendTextWithIndicators(const char *text, const bool urgent, const bool firstAttempt) {
 #if !IF_QUIET
-  SerialMon.print("Sending \""); SerialMon.print(text); SerialMon.println("\"...");
+  char outboundText[111] = {};
+  const size_t outboundLen = buildOutboundMessage(text, outboundText, sizeof(outboundText));
+  SerialMon.print("Sending \""); SerialMon.print(outboundText); SerialMon.println("\"...");
+#else
+  char outboundText[111] = {};
+  const size_t outboundLen = buildOutboundMessage(text, outboundText, sizeof(outboundText));
 #endif
   (void)urgent;
   pixelSetMode(MODE_WAITING);
@@ -373,11 +659,8 @@ static bool sendTextWithIndicators(const char *text, const bool urgent, const bo
   }
 #endif
 
-  size_t len = strlen(text);
-  if (len > 110) len = 110;
-  uint8_t mo[1 + 110] = {};
-  mo[0] = static_cast<uint8_t>(len);
-  memcpy(&mo[1], text, len);
+  uint8_t mo[110] = {};
+  memcpy(mo, outboundText, outboundLen);
 
   // Reset parsed SBDIX state so we don't read stale values on a timeout.
   gSBDIXSeen = false;
@@ -388,17 +671,18 @@ static bool sendTextWithIndicators(const char *text, const bool urgent, const bo
 #if (ENABLE_MT_RECEIVE == 1)
   uint8_t mt[270];
   size_t mtLen = sizeof(mt);
-  err = modem.sendReceiveSBDBinary(mo, 1 + len, mt, mtLen);
+  err = modem.sendReceiveSBDBinary(mo, outboundLen, mt, mtLen);
 #else
   // Send-only is usually faster/cheaper (no MT retrieval) when you don't need inbound messages.
-  err = modem.sendSBDBinary(mo, 1 + len);
+  err = modem.sendSBDBinary(mo, outboundLen);
 #endif
   if (err == ISBD_IS_ASLEEP) {
+    gModemConfigured = false;
     if (ensureModemAwake()) {
 #if (ENABLE_MT_RECEIVE == 1)
-      err = modem.sendReceiveSBDBinary(mo, 1 + len, mt, mtLen);
+      err = modem.sendReceiveSBDBinary(mo, outboundLen, mt, mtLen);
 #else
-      err = modem.sendSBDBinary(mo, 1 + len);
+      err = modem.sendSBDBinary(mo, outboundLen);
 #endif
     }
   }
@@ -414,6 +698,9 @@ static bool sendTextWithIndicators(const char *text, const bool urgent, const bo
   const bool timedOutButSent   = (err == ISBD_SENDRECEIVE_TIMEOUT && moReportedSuccess);
 
   if (err != ISBD_SUCCESS && !timedOutButSent) {
+    if (err == ISBD_PROTOCOL_ERROR || err == ISBD_NO_MODEM_DETECTED) {
+      gModemConfigured = false;
+    }
 #if !IF_QUIET
     SerialMon.print("SBD send failed, err="); SerialMon.print(err); SerialMon.print(".\tReason:");
     switch (err) {
@@ -479,20 +766,42 @@ static bool sendTextWithIndicators(const char *text, const bool urgent, const bo
 }
 
 // edge detection for active-LOW buttons
+/**
+ * Detects a single falling-edge press event for an active-low button while
+ * updating the stored prior state for the next pass through the loop.
+ */
 static bool edgePressed(const bool current, bool &last) {
   const bool pressed = (last == true && current == false); // HIGH->LOW
   last = current;
   return pressed;
 }
 
-static unsigned long computeRetryDelayMs(const int err, const int moStatus, const bool sawSBDIX) {
-  // Fast-ish retry for transient errors; slower for "no network service".
-  if (sawSBDIX && moStatus == 32) return CFG_RETRY_DELAY_NO_NETWORK_MS;
-  if (err == ISBD_NO_NETWORK) return CFG_RETRY_DELAY_NO_NETWORK_MS;
-  if (err == ISBD_SENDRECEIVE_TIMEOUT) return CFG_RETRY_DELAY_TIMEOUT_MS;
-  return kRetryDelayMs;
+/**
+ * Chooses the next outer retry delay from the last library error, MO status,
+ * and attempt number so early retries are aggressive and repeated no-network
+ * cases back off more deliberately.
+ */
+static unsigned long computeRetryDelayMs(const int err, const int moStatus, const bool sawSBDIX, const uint8_t attemptCount) {
+  if (sawSBDIX && moStatus == 35) return randomRetryDelayMs(kRetryDelayMs);
+  if (sawSBDIX && moStatus == 33) return CFG_RETRY_DELAY_ANTENNA_MS;
+  if (err == ISBD_PROTOCOL_ERROR || err == ISBD_NO_MODEM_DETECTED) return CFG_RETRY_DELAY_TIMEOUT_MS;
+
+  if (attemptCount <= 2) return randomRetryDelayMs(kRetryDelayMs);
+  if (attemptCount <= 4) {
+    if (sawSBDIX && moStatus == 32) return randomRetryDelayMs(CFG_RETRY_DELAY_NO_NETWORK_MS);
+    if (err == ISBD_NO_NETWORK || err == ISBD_SENDRECEIVE_TIMEOUT) return randomRetryDelayMs(CFG_RETRY_DELAY_NO_NETWORK_MS);
+    return randomRetryDelayMs(CFG_RETRY_DELAY_TIMEOUT_MS);
+  }
+
+  if (sawSBDIX && moStatus == 32) return CFG_RETRY_DELAY_SLOW_MS;
+  if (err == ISBD_NO_NETWORK || err == ISBD_SENDRECEIVE_TIMEOUT) return CFG_RETRY_DELAY_SLOW_MS;
+  return CFG_RETRY_DELAY_TIMEOUT_MS;
 }
 
+/**
+ * Initializes buttons, LEDs, GNSS, UART, and the RockBLOCK control pins, then
+ * primes the modem power path before the device enters its idle event loop.
+ */
 void setup() {
   // Buttons: active-LOW to GND
   pinMode(BTN_ALERT, INPUT_PULLUP);
@@ -501,6 +810,7 @@ void setup() {
   // USB Serial
   SerialMon.begin(115200);
   waitForSerialIfEnabled();
+  randomSeed(micros());
 
   setupLeds();
 
@@ -543,17 +853,17 @@ void setup() {
 #endif
 }
 
+/**
+ * Runs the top-level device state machine, including button handling, wake
+ * delays, send attempts, retry backoff, success hold, and cancel/reset actions.
+ */
 void loop() {
   processGps();
+  updateTwoButtonControl();
 
   const bool curAlert = digitalRead(BTN_ALERT);
   const bool curSOS   = digitalRead(BTN_SOS);
   const bool bothPressed = (curAlert == LOW && curSOS == LOW);
-
-  if (deviceState != DeviceState::IDLE && bothPressed) {
-    gCancelRequested = true;
-    deviceState = DeviceState::CANCELLED;
-  }
 
   switch (deviceState) {
     case DeviceState::IDLE: {
@@ -562,38 +872,13 @@ void loop() {
 #if !IF_QUIET
           SerialMon.println("ALERT button pressed.");
 #endif
-          sendStartMs = millis();
-
-          // Reset context
-          memset(&sendCtx, 0, sizeof(sendCtx));
-          strcpy(sendCtx.text, "ALERT");
-          sendCtx.urgent = false;
-          sendCtx.firstAttempt = true;
-
-          gCancelRequested = false;
-
-          // Attempt GPS (this blocks for up to 15s or until fix/cancel)
-          // It appends coordinates to sendCtx.text
-          attemptGpsFix(sendCtx.text, cancelRequested);
-
-          deviceState = DeviceState::SEND_ATTEMPT;
+          startSendRequest("ALERT", false);
 
         } else if (!bothPressed && edgePressed(curSOS, lastSOS)) {
 #if !IF_QUIET
           SerialMon.println("SOS button pressed.");
 #endif
-          sendStartMs = millis();
-
-          memset(&sendCtx, 0, sizeof(sendCtx));
-          strcpy(sendCtx.text, "SOS");
-          sendCtx.urgent = true;
-          sendCtx.firstAttempt = true;
-
-          gCancelRequested = false;
-
-          attemptGpsFix(sendCtx.text, cancelRequested);
-
-          deviceState = DeviceState::SEND_ATTEMPT;
+          startSendRequest("SOS", true);
         }
         lastBounceMs = now;
       }
@@ -603,14 +888,39 @@ void loop() {
       }
       break;
     }
+    case DeviceState::MODEM_WAKE_WAIT: {
+      if (cancelRequested()) {
+        deviceState = DeviceState::CANCELLED;
+        break;
+      }
+      updateWaitingBlink();
+      if (gStateDeadlineMs != 0 && millis() >= gStateDeadlineMs) {
+        gStateDeadlineMs = 0;
+        deviceState = DeviceState::SEND_ATTEMPT;
+      } else {
+        lowPowerDelayMs(CFG_IDLE_POLL_MS);
+      }
+      break;
+    }
     case DeviceState::SEND_ATTEMPT: {
       if (cancelRequested()) {
         deviceState = DeviceState::CANCELLED;
         break;
       }
+      ++sendCtx.attemptCount;
+#if !IF_QUIET
+      SerialMon.print("Send attempt #");
+      SerialMon.println(sendCtx.attemptCount);
+#endif
       const bool ok = sendTextWithIndicators(sendCtx.text, sendCtx.urgent, sendCtx.firstAttempt);
       sendCtx.firstAttempt = false;
-      deviceState = ok ? DeviceState::SUCCESS_HOLD : DeviceState::RETRY_WAIT;
+      if (ok) {
+        deviceState = DeviceState::SUCCESS_HOLD;
+      } else if (lastSendErr == ISBD_CANCELLED || gPendingTwoButtonAction != TwoButtonAction::NONE) {
+        deviceState = DeviceState::CANCELLED;
+      } else {
+        deviceState = DeviceState::RETRY_WAIT;
+      }
       break;
     }
     case DeviceState::RETRY_WAIT: {
@@ -618,13 +928,14 @@ void loop() {
         deviceState = DeviceState::CANCELLED;
         break;
       }
-      const unsigned long delayMs = computeRetryDelayMs(lastSendErr, lastMoStatus, lastSawSBDIX);
+      const unsigned long delayMs = computeRetryDelayMs(lastSendErr, lastMoStatus, lastSawSBDIX, sendCtx.attemptCount);
 #if !IF_QUIET
-      SerialMon.println("Retrying after delay...\n\n");
+      SerialMon.print("Retrying after ");
+      SerialMon.print(delayMs);
+      SerialMon.println(" ms...\n");
 #endif
-      pixelSetMode(MODE_WAITING);
-      const bool allowEarlyExit = !(lastSawSBDIX && lastMoStatus == 32);
-      (void)waitWithSignalLogsUntilReady(delayMs, CFG_MIN_CSQ_TO_SEND, CFG_MIN_CSQ_STABLE_SAMPLES, allowEarlyExit);
+      pixelSetMode(MODE_RETRY_WAIT);
+      waitWithSignalLogs(delayMs);
       deviceState = cancelRequested() ? DeviceState::CANCELLED : DeviceState::SEND_ATTEMPT;
       break;
     }
@@ -640,7 +951,20 @@ void loop() {
     }
     case DeviceState::CANCELLED: {
       cancelCurrentOperation();
-      deviceState = DeviceState::IDLE;
+      if (gPendingTwoButtonAction == TwoButtonAction::RESET_PULSE) {
+        beginModemResetPulse();
+      } else {
+        gPendingTwoButtonAction = TwoButtonAction::NONE;
+        deviceState = DeviceState::IDLE;
+      }
+      break;
+    }
+    case DeviceState::MODEM_RESET_PULSE: {
+      if (gStateDeadlineMs != 0 && millis() >= gStateDeadlineMs) {
+        finishModemResetPulse();
+      } else {
+        lowPowerDelayMs(CFG_IDLE_POLL_MS);
+      }
       break;
     }
   }
